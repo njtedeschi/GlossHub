@@ -1,0 +1,4 @@
+{:main gloss.app
+ :output-to "public/js/main.js"
+ :output-dir "target/release"
+ :optimizations :advanced}

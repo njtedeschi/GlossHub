@@ -1,0 +1,34 @@
+\title Hebrew sentences
+\about Constructed Hebrew sentences, with transliteration, glosses, stems and roots.
+\dir rtl
+
+\section[home] At home
+\ex 1
+\text הַיֶּלֶד אוֹכֵל לֶחֶם + בְּבֵיתוֹ
+\morph הַ=יֶּלֶד אוֹכֵל לֶחֶם בְּ=בֵית-וֹ
+\translit hayeled okhel leḥem beveto
+\morph[translit] ha=[yeled] [okhel] [leḥem] be=[vet]-o
+\glword {the boy} eats bread {in his house}
+\ft The boy eats bread
+    in his house.
+\note[yeled] {הַיֶּלֶד} *yeled*: boy, child.
+
+\ex 2
+\text הַיַּלְדָּה רוֹאָה אֶת־ הַסֵּפֶר + **וְשׂוֹמַחַת**
+\morph הַ=יַּלְדָּה רוֹאָה אֶת הַ=סֵּפֶר וְ=שׂוֹמַחַת
+\translit hayaldah ro’ah et hasefer vesomeaḥat
+\morph[translit] ha=[yaldah] [ro’ah] et ha=[sefer] ve=[someaḥat]
+\glword {the girl} sees {} {the book} {and is glad}
+\ft The girl sees the book
+    and is glad.
+\note[sefer] {הַסֵּפֶר} *sefer*: book, scroll.
+
+\section[school] At school
+\ex 3
+\text הַיֶּלֶד כָּתַב סֵפֶר
+\morph הַ=יֶּלֶד [(כ)(ת)(ב)] סֵפֶר
+\translit hayeled katav sefer
+\morph[translit] ha=[yeled] [(k)a(t)a(v)] [sefer]
+\glmorph the=boy write\\PST.3SG.M book
+\glword {the boy} wrote {a book}
+\ft The boy wrote a book.

@@ -1,0 +1,17 @@
+{
+  "name": "glosshub",
+  "private": true,
+  "description": "Development commands, browser tests and the site's assembly script for GlossHub. The site itself has no npm dependencies.",
+  "scripts": {
+    "dev": "clojure -M:dev",
+    "build": "clojure -M:release",
+    "build:site": "node scripts/build-site.cjs",
+    "serve": "python3 -m http.server -d public 8000",
+    "test": "npm run test:unit && npm run build && npm run test:browser",
+    "test:unit": "clojure -M:test && node target/test/test.js",
+    "test:browser": "node --test --test-concurrency=1 \"test/browser/*.test.cjs\""
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

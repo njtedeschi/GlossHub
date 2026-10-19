@@ -1,0 +1,5 @@
+{:main gloss.test-runner
+ :target :nodejs
+ :output-to "target/test/test.js"
+ :output-dir "target/test/out"
+ :optimizations :none}

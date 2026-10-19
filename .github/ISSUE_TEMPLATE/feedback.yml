@@ -1,0 +1,35 @@
+name: Feedback
+description: Something confusing, missing or wrong while using the site.
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying GlossHub. Anything is useful: a question, an
+        idea, something that didn't work. You don't need to fill in every
+        box.
+  - type: textarea
+    id: what
+    attributes:
+      label: What were you doing, and what happened?
+      description: What you tried, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: text
+    attributes:
+      label: The text involved (optional)
+      description: |
+        If it's about a text, paste its source here (on its page: Edit,
+        then Document source) or attach the file from Export.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown at the bottom of every page, such as "Version 1a2b3c4 (2026-11-02)".
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and device
+      placeholder: e.g. Firefox on a laptop, Safari on an iPhone

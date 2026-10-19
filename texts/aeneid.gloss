@@ -1,0 +1,53 @@
+\glosshubformat 1
+\title Aeneid 1.8–11
+\about Vergil, *Aeneid* 1.8–11: Leipzig glosses with dactylic hexameter scansion.
+\color NOM #929084 Nom
+\color GEN #BDD9BF Gen
+\color DAT #FFC857 Dat
+\color ACC #E5323B Acc
+\color ABL #A997DF Abl
+\color VOC #2E4052 Voc
+
+\ex 1.8
+\scan _ u u ' _ _ ' _ u u ' _ || _ ' _ u u ' _ _
+\syl Mū-sa mi-hī cau-sās me-mo-rā quō nū-mi-ne lae-sō
+\text Mūsa, mihī causās **memorā**, quō nūmine laesō
+\morph Mūs-a mihī caus-ās memor-ā quō nūmin-e laes-ō
+\glmorph muse-VOC.SG 1SG.DAT cause-ACC.PL recount-2SG.PRS.ACT.IMP what.ABL.N.SG divinity-ABL.SG offended-ABL.N.SG
+\glword {O Muse} {to me} {the causes} recount what divinity offended
+\pos N Pro N V.trans Adj N Ptcp
+\ft Muse, recount to me the causes: what divinity was offended,
+\note[abl-abs] {quō nūmine laesō} Ablative absolute
+
+\ex 1.9
+\scan _ u u ' _ _ ' _ u u ' _ || _ ' _ u u ' _ _
+\syl quid-ve do-lēns rē-gī-na de-um tot vol-ve-re cā-sūs
+\text quidve dolēns rēgīna deum tot **volvere** cāsūs
+\morph quid=ve dol-ēns rēgīn-a de-um tot volv-ere cās-ūs
+\glmorph what.ACC.N.SG=or grieving-NOM.F.SG queen-NOM.SG god-GEN.PL so.many undergo-PRS.ACT.INF misfortune-ACC.PL
+\glword {or what} grieving {the queen} {of the gods} {so many} {to undergo} misfortunes
+\pos Pro=Conj Ptcp N N Det.quant V.trans N
+\ft or grieving at what, did the queen of the gods [drive] to undergo so many misfortunes
+\note[imp-comp] {tot volvere cāsūs} {@1.10 tot adīre labōrēs} Complement clauses of *impulerit*
+
+\ex 1.10
+\scan _ _ ' _ u u ' _ u u ' _ || u u ' _ u u ' _ _
+\syl īn-sig-nem pi-e-tā-te vi-rum tot a-dī-re la-bō-rēs
+\text īnsignem pietāte virum tot **adīre** labōrēs
+\morph īnsign-em pietāt-e vir-um tot adīre labōr-ēs
+\glmorph distinguished-ACC.M.SG piety-ABL.SG man-ACC.SG so.many approach.PRS.ACT.INF labor-ACC.PL
+\glword distinguished {by piety} man {so many} {to approach} labors
+\pos Adj N N Det.quant V.trans N
+\ft a man distinguished by piety, to face so many labors?
+\note[imp-obj] {īnsignem pietāte virum} Object of *impulerit*
+
+\ex 1.11
+\scan _ u u ' _ || _ ' _ u u ' _ _ ' _ u u ' _ _
+\syl im-pu-le-rit Tan-tae-n(e)‿a-ni-mīs cae-les-ti-bus ī-rae
+\text **impulerit**. Tantaene animīs caelestibus īrae?
+\morph impul-erit Tant-ae=ne anim-īs caelest-ibus īr-ae
+\glmorph impel-3SG.PRF.ACT.SBJV such-NOM.F.PL=Q mind-DAT.PL celestial-DAT.F.PL anger-NOM.PL
+\glword impelled {such?} {to minds} celestial angers
+\pos V.trans Adj=Part N Adj N
+\ft Is there such anger in heavenly minds?
+\note[dat-poss] {animīs caelestibus} Dative of possession (implicit *sunt*)

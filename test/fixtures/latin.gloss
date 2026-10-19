@@ -1,0 +1,53 @@
+\title Latin sentences
+\about Constructed sentences: Leipzig glosses, dactylic hexameter scansion, notes across lines and an infix.
+\color NOM #929084 Nom
+\color DAT #FFC857 Dat
+\color ACC #E5323B Acc
+\color ABL #A997DF Abl
+
+\ex 1
+\scan _ u u ' _ u u ' _ || _ ' _ _ ' _ u u ' _ _
+\syl Nau-ta ca-nit pu-e-rī rī-dent et lū-na re-ful-get
+\text Nauta canit, **puerī** rīdent, et lūna refulget
+\morph Naut-a can-it puer-ī rīd-ent et lūn-a re-fulg-et
+\glmorph sailor-NOM.SG sing-3SG.PRS boy-NOM.PL laugh-3PL.PRS and moon-NOM.SG back-shine-3SG.PRS
+\glword {the sailor} sings {the boys} laugh and {the moon} {shines out}
+\pos N V.intr N V.intr Conj N V.intr
+\ft The sailor sings, the boys laugh, and the moon shines out.
+\note[coord] {rīdent et lūna refulget} Two clauses joined by *et*.
+
+\ex 2
+\text Puellā cantante nautaque **nāvigat**.
+\morph Puell-ā cant-ante naut-a=que nāvig-at
+\glmorph girl-ABL.SG sing-PRS.PTCP.ABL.SG sailor-NOM.SG=and sail-3SG.PRS
+\glword {the girl} singing {and the sailor} sails
+\pos N Ptcp N=Conj V.intr
+\ft While the girl sings, the sailor too sets sail.
+\note[abl-abs] {Puellā cantante} Ablative absolute
+
+\ex 3
+\scan _ u u ' _ u u ' _ || u u ' _ u u ' _ u u ' _ _
+\syl Il-l(e)‿u-bi vē-nit a-quam pu-e-rīs de-dit ō-re be-nig-nō
+\text Ille ubi vēnit, aquam puerīs dedit ōre benignō.
+\morph Ill-e ubi vēn-it aqu-am puer-īs ded-it ōr-e benign-ō
+\glmorph that-NOM.M.SG when come-3SG.PRF water-ACC.SG boy-DAT.PL give-3SG.PRF face-ABL.SG kind-ABL.N.SG
+\glword he when came water {to the boys} gave {with a face} kindly
+\pos Pro Conj.subord V.intr N N V.ditr N Adj
+\ft When he came, he gave the boys water with a kindly face.
+\note[manner] {ōre benignō} Ablative of manner
+
+\ex 4
+\text Puer aquam portat, puella vīnum;
+\morph Puer aqu-am port-at puell-a vīn-um
+\glmorph boy.NOM.SG water-ACC.SG carry-3SG.PRS girl-NOM.SG wine-ACC.SG
+\glword {the boy} water carries {the girl} wine
+\ft The boy carries water, the girl wine;
+\note[pairs] {aquam portat} {@5 vīnum bibunt} Object and verb, in each clause.
+\note[wine] {@5 nautae … vīnum} {* puella} The sailors drink the wine the girl brings. *puella* is highlighted with it, without a number.
+
+\ex 5
+\text nautae laetī vīnum bibunt et caus**ās** [vincunt](https://en.wiktionary.org/wiki/vinco#Latin).
+\morph naut-ae laet-ī vīn-um bib-unt et caus-ās vi<n>c-unt
+\glmorph sailor-NOM.PL happy-NOM.M.PL wine-ACC.SG drink-3PL.PRS and cause-ACC.PL conquer<PRS>-3PL
+\glword {the sailors} happy {the wine} drink and {their cases} win
+\ft the happy sailors drink the wine and win their cases.

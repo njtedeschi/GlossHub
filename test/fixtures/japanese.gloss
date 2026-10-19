@@ -1,0 +1,11 @@
+\title Japanese sentence
+\about A constructed Japanese sentence, with furigana and transcriptions.
+
+\ex
+\text {青|あお}{空|ぞら} に {白|しろ}い {雲|くも} が {浮|う}かぶ。
+\morph 青空 に 白-い 雲 が 浮かぶ
+\glmorph blue.sky in white-ADJ cloud NOM float
+\phonemic aozora ni siroi kumo ga ukabu
+\phonetic aozoɾa ni ɕiɾoi kɯmo ga ɯkabɯ
+\ft White clouds float in the blue sky.
+\note[kumo] {雲} *kumo*: cloud.
