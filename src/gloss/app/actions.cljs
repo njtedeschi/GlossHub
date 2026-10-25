@@ -15,25 +15,25 @@
 ;; Cell editing
 
 (defn- cell-value
-  "The text to edit for `target` (see gloss.render/cell): an item under a
+  "The text to edit for `target` (see gloss.render/cell): an entry under a
   word, a free translation, a note or the title."
-  [doc {:keys [row line word note]}]
-  (let [l (when line (get-in doc [:lines (model/line-index doc line)]))]
+  [doc {:keys [row igt word note]}]
+  (let [l (when igt (get-in doc [:igts (model/igt-index doc igt)]))]
     (case row
       "ft" (:free l)
       "note" (:text (first (notes/find-note doc note)))
       "title" (:title doc)
-      (ser/item row (get-in l [:words word])))))
+      (ser/entry row (get-in l [:words word])))))
 
 (defn- apply-cell
   "The document with `value` typed into the cell `target` (see
   `cell-value`)."
-  [doc {:keys [row line word note]} value]
+  [doc {:keys [row igt word note]} value]
   (case row
-    "ft" (edit/set-free doc line value)
+    "ft" (edit/set-free doc igt value)
     "note" (edit/set-note doc note value)
     "title" (assoc doc :title (if (str/blank? value) "Untitled" (str/trim value)))
-    (edit/set-item doc line word row value)))
+    (edit/set-entry doc igt word row value)))
 
 (defn- start-edit
   "Starts editing the cell `target`, with its current value as the draft."
@@ -51,20 +51,20 @@
     s))
 
 (defn- neighbour-target
-  "The same tier on the next (or previous) word, wrapping to adjacent lines."
-  [doc {:keys [line word] :as target} step]
+  "The same tier on the next (or previous) word, wrapping to adjacent IGTs."
+  [doc {:keys [igt word] :as target} step]
   (when word
-    (let [lines (:lines doc)
-          li (model/line-index doc line)
-          n (count (get-in lines [li :words]))
+    (let [igts (:igts doc)
+          li (model/igt-index doc igt)
+          n (count (get-in igts [li :words]))
           w (+ word step)]
       (cond
         (< -1 w n) (assoc target :word w)
-        (and (>= w n) (< (inc li) (count lines)))
-        (assoc target :line (:id (get lines (inc li))) :word 0)
+        (and (>= w n) (< (inc li) (count igts)))
+        (assoc target :igt (:id (get igts (inc li))) :word 0)
         (and (neg? w) (pos? li))
-        (let [prev (get lines (dec li))]
-          (assoc target :line (:id prev) :word (dec (count (:words prev)))))))))
+        (let [prev (get igts (dec li))]
+          (assoc target :igt (:id prev) :word (dec (count (:words prev)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Files
@@ -99,6 +99,16 @@
       (.focus ta)
       (.setSelectionRange ta start end)
       (.scrollIntoView ta #js {:block "nearest"}))))
+
+(defn- apply-source
+  "Closes a source editor, putting `doc`, the open document as its source
+  now reads, in place, unless the source is unchanged: IGTs read again get
+  new ids, so the same text would still be an edit (and an edited version
+  of a published text)."
+  [s doc]
+  (cond-> (assoc s :ui {})
+    (not= (ser/document-source doc) (ser/document-source (state/current-doc s)))
+    (state/update-doc (constantly doc))))
 
 (defn- add-doc
   "Adds a text of the reader's own and opens its page, in `mode`."
@@ -166,54 +176,53 @@
                       s))
                   :else s))
 
-    :line/source (assoc s :ui {:source {:line arg
-                                        :text (let [doc (state/current-doc s)]
-                                                (ser/line-block (get-in doc [:lines (model/line-index doc arg)])))}})
-    :line/add (assoc s :ui {:source {:after arg :text "\\ex\n\\text "}})
+    :igt/source (assoc s :ui {:source {:igt arg
+                                       :text (let [doc (state/current-doc s)]
+                                               (ser/igt-block (get-in doc [:igts (model/igt-index doc arg)])))}})
+    :igt/add (assoc s :ui {:source {:after arg :text "\\igt\n\\text "}})
     ;; Deleting takes two clicks: the first arms the button.
-    :line/delete (if (= [:line arg] (get-in s [:ui :confirm]))
-                   (-> s (state/update-doc edit/delete-line arg) (assoc :ui {}))
-                   (assoc-in s [:ui :confirm] [:line arg]))
+    :igt/delete (if (= [:igt arg] (get-in s [:ui :confirm]))
+                  (-> s (state/update-doc edit/delete-igt arg) (assoc :ui {}))
+                  (assoc-in s [:ui :confirm] [:igt arg]))
     :source/draft (assoc-in s [:ui :source :text] (target-value e))
-    :source/fill (update-in s [:ui :source :text] parse/fill-row arg)
+    :source/fill (update-in s [:ui :source :text] parse/fill-tier arg)
+    ;; Keys in a source box; `arg` is the box's apply event.
     :source/key (cond
                   (= (.-key e) "Escape") (assoc s :ui {})
                   (and (= (.-key e) "Enter") (or (.-ctrlKey e) (.-metaKey e)))
-                  (do (.preventDefault e) (handle s e [:source/apply]))
+                  (do (.preventDefault e) (handle s e arg))
                   :else s)
     :source/cancel (assoc s :ui {})
     :source/goto (do (select-source-line! arg) s)
-    :source/apply (let [{:keys [line after text]} (get-in s [:ui :source])
-                        {:keys [lines]} (parse/parse-lines text)]
-                    (-> s
-                        (state/update-doc (fn [doc]
-                                            (if line
-                                              (edit/replace-line doc line lines)
-                                              (edit/insert-lines doc after lines))))
-                        (assoc :ui {})))
+    :source/apply (let [{:keys [igt after text]} (get-in s [:ui :source])
+                        {:keys [igts]} (parse/parse-igts text)
+                        doc (state/current-doc s)]
+                    (apply-source s (if igt
+                                      (edit/replace-igt doc igt igts)
+                                      (edit/insert-igts doc after igts))))
 
     :doc/source (assoc s :ui {:doc-source (ser/document-source (state/current-doc s))})
     :mode/set (assoc s :mode arg :ui {})
     :history/undo (state/undo s)
     :history/redo (state/redo s)
-    :layers/open (assoc s :ui {:layers true})
-    :layers/close (assoc s :ui {})
-    ;; Reordering layers is a display setting: the reader's own order for
-    ;; this text. "Save as the document's order" (Edit mode) writes \order.
-    :layers/move (let [[k step] arg
-                       v (state/page-view s)
-                       order (model/present-layers (state/current-doc s) (:reader-order v))
-                       i (.indexOf order k)
-                       j (+ i step)]
-                   (if (and (<= 0 i) (< -1 j (count order)))
-                     (assoc-in s [:view :layer-orders (state/doc-key s)] (assoc order i (order j) j (order i)))
-                     s))
-    :layers/reset (update-in s [:view :layer-orders] dissoc (state/doc-key s))
-    :layers/save-doc (let [v (state/page-view s)
-                           order (model/present-layers (state/current-doc s) (:reader-order v))]
-                       (-> s
-                           (state/update-doc assoc :order order)
-                           (update-in [:view :layer-orders] dissoc (state/doc-key s))))
+    :row-order/open (assoc s :ui {:row-order true})
+    :row-order/close (assoc s :ui {})
+    ;; Reordering rows is a display setting: the reader's own order for
+    ;; this text. "Save as the text's order" (Edit mode) writes \order.
+    :row-order/move (let [[k step] arg
+                          v (state/page-view s)
+                          order (model/present-rows (state/current-doc s) (:reader-order v))
+                          i (.indexOf order k)
+                          j (+ i step)]
+                      (if (and (<= 0 i) (< -1 j (count order)))
+                        (assoc-in s [:view :row-orders (state/doc-key s)] (assoc order i (order j) j (order i)))
+                        s))
+    :row-order/reset (update-in s [:view :row-orders] dissoc (state/doc-key s))
+    :row-order/save-doc (let [v (state/page-view s)
+                              order (model/present-rows (state/current-doc s) (:reader-order v))]
+                          (-> s
+                              (state/update-doc assoc :order order)
+                              (update-in [:view :row-orders] dissoc (state/doc-key s))))
     :new/open (assoc s :ui {:new? true})
     :new/cancel (assoc s :ui {})
     :doc/duplicate (let [doc (case (first arg)
@@ -227,21 +236,24 @@
     :status/retry-save (do (js/setTimeout #(storage/save! @state/state) 0) s)
     :settings/reset-view (assoc s :view state/default-view :text-views {})
     ;; The reader's defaults (Settings): back to the site's, keeping the
-    ;; per-text layer orders and whether boxes are open.
-    :defaults/reset (assoc s :view (merge state/default-view (select-keys (:view s) [:layer-orders :display-open?])))
+    ;; per-text row orders and whether boxes are open.
+    :defaults/reset (assoc s :view (merge state/default-view (select-keys (:view s) [:row-orders :display-open?])))
     :view/reset-page (-> s
                          (update :text-views dissoc (state/doc-key s))
-                         (update-in [:view :layer-orders] dissoc (state/doc-key s)))
+                         (update-in [:view :row-orders] dissoc (state/doc-key s)))
     :prefs/set (assoc-in s [:prefs (first arg)] (second arg))
     ;; Erasing everything saved in this browser takes two clicks.
     :settings/erase (if (= [:erase] (get-in s [:ui :confirm]))
                       (assoc (state/initial-state) :route (:route s) :ui {:erased? true})
                       (assoc-in s [:ui :confirm] [:erase]))
+    ;; Live examples on Markdown pages: trying out changes (kept for the
+    ;; visit only).
+    :example/edit (assoc-in s [:example-drafts (first arg)] (second arg))
+    :example/draft (assoc-in s [:example-drafts arg] (target-value e))
+    :example/reset (update s :example-drafts dissoc arg)
     :doc-source/draft (assoc-in s [:ui :doc-source] (target-value e))
-    :doc-source/fill (update-in s [:ui :doc-source] parse/fill-row arg)
-    :doc-source/apply (-> s
-                          (state/update-doc (constantly (:doc (parse/parse-document (get-in s [:ui :doc-source])))))
-                          (assoc :ui {}))
+    :doc-source/fill (update-in s [:ui :doc-source] parse/fill-tier arg)
+    :doc-source/apply (apply-source s (:doc (parse/parse-document (get-in s [:ui :doc-source]))))
     :doc/new (add-doc s (:doc (parse/parse-document samples/blank)) :edit)
     ;; Deleting a text of one's own, or discarding one's edits to a published
     ;; text, takes two clicks: the first arms the button.
@@ -250,7 +262,7 @@
                       (-> s
                           (update :docs dissoc arg)
                           (update :order (fn [o] (vec (remove #{arg} o))))
-                          (update-in [:view :layer-orders] dissoc arg)
+                          (update-in [:view :row-orders] dissoc arg)
                           (update :text-views dissoc arg)
                           (assoc :ui {})))
                   (assoc-in s [:ui :confirm] [:doc arg]))

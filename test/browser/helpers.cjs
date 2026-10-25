@@ -49,7 +49,7 @@ const fixtures = Object.fromEntries(
 function savedWithTexts() {
   const ids = Object.keys(fixtures);
   const docs = ids.map(id => `${JSON.stringify(id)} ${JSON.stringify(fixtures[id])}`).join(' ');
-  return `{:format 1 :order [${ids.map(id => JSON.stringify(id)).join(' ')}] :docs {${docs}} :overrides {}}`;
+  return `{:format 2 :order [${ids.map(id => JSON.stringify(id)).join(' ')}] :docs {${docs}} :overrides {}}`;
 }
 
 /**

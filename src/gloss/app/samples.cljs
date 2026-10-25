@@ -6,7 +6,7 @@
   (:require-macros [gloss.inline :as inline]))
 
 (def blank
-  "A new blank text: a title and no lines."
+  "A new blank text: a title and no IGTs."
   "\\title Untitled\n")
 
 (def published

@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [gloss.app.actions :as actions]
             [gloss.app.dom :as dom]
+            [gloss.app.markdown-pages :as md-pages]
             [gloss.app.pages :as pages]
             [gloss.app.state :as state]
             [gloss.app.storage :as storage]
@@ -22,14 +23,19 @@
     (pages/published-page s)))
 
 (defn page-title
-  "The window title for the state's route."
+  "The window title for the state's route: the title of the text or the
+  Markdown page shown, else the section's name."
   [s]
-  (let [route (:route s)]
-    (if-let [doc (and (#{:text :own} (:page route)) (state/current-doc s))]
-      (str (:title doc) " · " state/site-name)
-      (if-let [[_ label] (some #(when (= (ui/section-of route) (first %)) %) state/sections)]
-        (str label " · " state/site-name)
-        state/site-name))))
+  (let [route (:route s)
+        doc (and (#{:text :own} (:page route)) (state/current-doc s))
+        guide-page (some-> (:guide-page route) md-pages/by-slug)
+        section (some #(when (= (ui/section-of route) (first %)) (second %)) state/sections)]
+    (cond
+      doc (str (:title doc) " · " state/site-name)
+      guide-page (str (:title guide-page) " · Guide · " state/site-name)
+      (= :about (:page route)) (str (:title md-pages/about) " · " state/site-name)
+      section (str section " · " state/site-name)
+      :else state/site-name)))
 
 ;; ---------------------------------------------------------------------------
 ;; Rendering loop

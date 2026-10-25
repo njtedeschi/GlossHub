@@ -2,8 +2,10 @@
   "Saving the reader's data in the browser, and reading it back from any
   earlier format."
   (:require [cljs.reader :as reader]
+            [clojure.set :as set]
             [clojure.string :as str]
             [gloss.app.state :as state]
+            [gloss.english :as english]
             [gloss.parse :as parse]
             [gloss.serialize :as ser]))
 
@@ -28,9 +30,9 @@
 (def save-format
   "The version of the saved data. Texts are saved as their source text (the
   stable, public form), so changes to the internal model don't affect saved
-  texts; this number covers the structure around them, and `migrate` is
-  where a later version would read an earlier one."
-  1)
+  texts; this number covers the structure around them, and `migrate` reads
+  the earlier formats. Format 2 renamed display settings (`from-format-1`)."
+  2)
 
 (def ^:private sources
   "Each text's source, by the text's value (weakly), so a save serializes
@@ -54,12 +56,38 @@
                :docs (as-source (:docs s))
                :overrides (as-source (:overrides s))))))
 
+(def ^:private format-1-names
+  "Display settings that format 1 saved under other names, by those names:
+  each group's switch was a row's, and the reader's row orders were layer
+  orders."
+  {:scansion-row :scansion-group
+   :orthography-row :orthography-group
+   :glossing-row :glossing-group
+   :marking-row :marking-group
+   :commentary-row :commentary-group
+   :layer-orders :row-orders})
+
+(defn- from-format-1
+  "Saved data of format 1 as format 2 has it: the display settings, the
+  reader's defaults and each text's own, under their new names, and the
+  morphemic gloss's \"tags only\" as \"grammatical only\"."
+  [saved]
+  (let [view (fn [v]
+               (when (map? v)
+                 (cond-> (set/rename-keys v format-1-names)
+                   (= :tags (:gloss v)) (assoc :gloss :grammatical))))]
+    (-> saved
+        (update :view view)
+        (update :text-views #(into {} (for [[k v] (when (map? %) %)] [k (view v)]))))))
+
 (defn migrate
-  "Saved data as the site uses it: each text, saved as source, parsed again.
-  Anything that isn't a text can't be shown, so it is left out."
+  "Saved data as the site uses it, from any earlier format: each text, saved
+  as source, parsed again, and the display settings under their current
+  names. Anything that isn't a text can't be shown, so it is left out."
   [saved]
   (let [revive-all (fn [docs] (into {} (for [[k d] docs :when (string? d)] [k (:doc (parse/parse-document d))])))]
-    (-> saved
+    (-> (cond-> saved
+          (= 1 (:format saved 1)) from-format-1)
         (update :docs revive-all)
         (update :overrides revive-all)
         (assoc :format save-format))))
@@ -100,7 +128,7 @@
   (let [own (for [id (:order s) :let [doc (get-in s [:docs id])] :when doc] ["own" id doc])
         edited (for [[slug doc] (sort-by key (:overrides s))] ["edited" slug doc])
         parts (concat own edited)]
-    (str export-header ", " date ": " (count parts) (if (= 1 (count parts)) " text" " texts") ".\n"
+    (str export-header ", " date ": " (english/counted (count parts) "text" "texts") ".\n"
          "% Import this file on GlossHub (Settings, or New text) to bring them back.\n"
          (apply str (for [[kind k doc] parts]
                       (str "\n% ==== " kind " " k "\n" (source-of doc)))))))

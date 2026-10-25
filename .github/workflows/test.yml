@@ -1,6 +1,7 @@
-# Unit and browser tests, on every pull request. The deployment workflow
-# runs them too, before it publishes anything. The steps are the npm scripts
-# a contributor runs (package.json), so CI and a local run do the same.
+# Unit tests, the file check and browser tests, on every pull request. The
+# deployment workflow runs them too, before it publishes anything. The steps
+# are the npm scripts a contributor runs (package.json), so CI and a local
+# run do the same.
 name: Tests
 
 on:
@@ -37,6 +38,8 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm run test:unit
+      - name: Check the published texts and the test texts
+        run: npm run test:check
       - name: Build the site
         run: npm run build
       - name: Browser tests

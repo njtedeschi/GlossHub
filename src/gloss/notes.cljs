@@ -10,14 +10,14 @@
 ;; ---------------------------------------------------------------------------
 ;; Notes and their groups
 ;;
-;; A note is {:tag :text :groups}, kept under the line it is written under
-;; (the line's :notes) or, after \end, in the document's :notes. Each group
+;; A note is {:tag :text :groups}, kept under the IGT it is written under
+;; (the IGT's :notes) or, after \end, in the document's :notes. Each group
 ;; quotes the words the note is about:
 ;;   {:words "tot adīre"}            consecutive words
 ;;   {:from "quō" :to "laesō"}       from one quote to the next of another,
-;;                                   possibly on the following lines
-;; with :at {:label :section} for another line (\note {@10 …}), and :star?
-;; when the group shows no number. Quotes are matched like \morph items:
+;;                                   possibly in the IGTs that follow
+;; with :at {:label :section} for another IGT (\note {@10 …}), and :star?
+;; when the group shows no number. Quotes are matched like \morph entries:
 ;; capitals, diacritics and punctuation don't matter.
 
 (defn note-key
@@ -27,12 +27,12 @@
   (or (:tag note) i))
 
 (defn all-notes
-  "The document's notes in order, each [key note home-line-id path]: those
-  under lines, then those after \\end (home nil)."
+  "The document's notes in order, each [key note home-igt-id path]: those
+  under IGTs, then those after \\end (home nil)."
   [doc]
-  (let [under (for [[li line] (map-indexed vector (:lines doc))
-                    [ni note] (map-indexed vector (:notes line))]
-                [note (:id line) [:lines li :notes ni]])
+  (let [under (for [[li igt] (map-indexed vector (:igts doc))
+                    [ni note] (map-indexed vector (:notes igt))]
+                [note (:id igt) [:igts li :notes ni]])
         back (for [[ni note] (map-indexed vector (:notes doc))]
                [note nil [:notes ni]])]
     (vec (map-indexed (fn [i [note home path]] [(note-key note i) note home path])
@@ -63,42 +63,42 @@
   [s]
   (vec (remove #{""} (map match-key (str/split (str/trim (str s)) #"\s+")))))
 
-(defn- row-keys
-  "A line's words on surface `s`, for matching."
-  [line s]
-  (mapv #(match-key (model/surface-word % s)) (:words line)))
+(defn- word-keys
+  "An IGT's words on surface `s`, for matching."
+  [igt s]
+  (mapv #(match-key (model/surface-word % s)) (:words igt)))
 
 (defn- occurrences
-  "Where `ks` occur as consecutive words in `row` (from index `from`)."
-  [row ks & [from]]
+  "Where `ks` occur as consecutive words in `words` (from index `from`)."
+  [words ks & [from]]
   (let [n (count ks)]
     (if (zero? n)
       []
-      (vec (for [i (range (or from 0) (inc (- (count row) n)))
-                 :when (= ks (subvec row i (+ i n)))]
+      (vec (for [i (range (or from 0) (inc (- (count words) n)))
+                 :when (= ks (subvec words i (+ i n)))]
              i)))))
 
 (defn- locate
-  "The line a group is matched in: {:line} or {:problem}."
-  [{:keys [at]} home lines-by-label sections home-section]
+  "The IGT a group is matched in: {:igt} or {:problem}."
+  [{:keys [at]} home igts-by-label sections home-section]
   (cond
     (nil? at) (if home
-                {:line home}
-                {:problem "A note after \\end must say which line each group is in: {@label …}."})
+                {:igt home}
+                {:problem "A note after \\end must say which IGT each group is in: {@label …}."})
     (and (:section at) (not (contains? sections (:section at))))
     {:problem (str "@" (:section at) "/" (:label at) ": no section is labelled “" (:section at) "”.")}
     :else
     (let [section (if (:section at) (sections (:section at)) home-section)
-          found (lines-by-label [section (:label at)])]
+          found (igts-by-label [section (:label at)])]
       (cond
         (empty? found)
         {:problem (str "@" (when (:section at) (str (:section at) "/")) (:label at)
-                       ": no line is labelled “" (:label at) "”"
+                       ": no IGT is labelled “" (:label at) "”"
                        (if (:section at) " in that section" (when home-section " in this section"))
-                       ". Notes refer to lines by their own labels (\\ex " (:label at) "), not by their numbers.")}
+                       ". Notes refer to IGTs by their own labels (\\igt " (:label at) "), not by their numbers.")}
         (> (count found) 1)
-        {:problem (str "@" (:label at) ": more than one line is labelled “" (:label at) "”.")}
-        :else {:line (:id (first found))}))))
+        {:problem (str "@" (:label at) ": more than one IGT is labelled “" (:label at) "”.")}
+        :else {:igt (:id (first found))}))))
 
 (defn- quoted [s n] (str "“" (str/trim s) (when n (str "#" n)) "”"))
 
@@ -119,28 +119,28 @@
 
 (defn- span-end
   "Where a span's second quote ends: its first place after the first quote
-  (or its #nth), on line `li` from word `from` or on the lines after, on
-  surface `s`. [line-index word] or nil, and how many places there were."
-  [group lines li from s]
+  (or its #nth), in IGT `li` from word `from` or in the IGTs after, on
+  surface `s`. [igt-index word] or nil, and how many places there were."
+  [group igts li from s]
   (let [ks (quote-keys (:to group))
         places (when (seq ks)
-                 (for [k (range li (count lines))
-                       hit (occurrences (row-keys (lines k) s) ks (when (= k li) from))]
+                 (for [k (range li (count igts))
+                       hit (occurrences (word-keys (igts k) s) ks (when (= k li) from))]
                    [k (+ hit (count ks) -1)]))]
     [(first (drop (dec (or (:to-nth group) 1)) places)) (count places)]))
 
 (defn- match-group
-  "Matches a group in its line (and, for a span, the lines after it).
-  Returns {:members [[line-id i]] :mark [line-id i]} or {:problem}. A quote
+  "Matches a group in its IGT (and, for a span, the IGTs after it).
+  Returns {:members [[igt-id i]] :mark [igt-id i]} or {:problem}. A quote
   with #n stands for its nth place (for a span's end, after its start)."
-  [group line-id lines pos]
-  (let [li (pos line-id)
+  [group igt-id igts pos]
+  (let [li (pos igt-id)
         span? (some? (:from group))
         [q n] (if span? [(:from group) (:from-nth group)] [(:words group) (:nth group)])
         ks (quote-keys q)
-        where (if (:at group) "in that line" "in this line")
-        ;; The first surface the quote occurs on: \text, else \translit.
-        [s hits] (or (some (fn [s] (let [h (occurrences (row-keys (lines li) s) ks)] (when (seq h) [s h]))) model/surfaces)
+        where (if (:at group) "in that IGT" "in this IGT")
+        ;; The first surface the quote occurs on: \text, else \text[translit].
+        [s hits] (or (some (fn [s] (let [h (occurrences (word-keys (igts li) s) ks)] (when (seq h) [s h]))) model/surfaces)
                      ["text" []])]
     (if-let [problem (place-problem group q n hits where)]
       {:problem problem}
@@ -148,45 +148,45 @@
         (if-not span?
           ;; Consecutive words: the number goes after the last.
           (let [end (+ start (count ks) -1)]
-            {:members (mapv #(vector line-id %) (range start (inc end))) :mark [line-id end]})
+            {:members (mapv #(vector igt-id %) (range start (inc end))) :mark [igt-id end]})
           ;; A span: every word from the first quote to the end of the second.
-          (let [[end found] (span-end group lines li (+ start (count ks)) s)]
+          (let [[end found] (span-end group igts li (+ start (count ks)) s)]
             (if-let [[ek ej] end]
               {:members (vec (for [k (range li (inc ek))
-                                   :let [l (lines k)]
+                                   :let [l (igts k)]
                                    i (range (if (= k li) start 0) (if (= k ek) (inc ej) (count (:words l))))]
                                [(:id l) i]))
-               :mark [(:id (lines ek)) ej]}
+               :mark [(:id (igts ek)) ej]}
               {:problem (if (and (:to-nth group) (pos? found))
                           (str (quoted (:to group) (:to-nth group)) ": “" (str/trim (:to group)) "” follows "
                                (quoted q n) " only " (times found) ".")
                           (str (quoted (:to group) nil) " doesn't follow " (quoted q n) " " where
-                               (when (seq (quote-keys (:to group))) " or the lines after it") "."))})))))))
+                               (when (seq (quote-keys (:to group))) " or the ones after it") "."))})))))))
 
 (defn- note-problem
-  "A problem with a note, on the line it is written under (if any)."
+  "A problem with a note, on the IGT it is written under (if any)."
   [home msg]
-  (cond-> {:level :warning :msg msg :field "note"} home (assoc :line home)))
+  (cond-> {:level :warning :msg msg :field "note"} home (assoc :igt home)))
 
 (defn- doc-places
-  "Where things are in a document, for matching notes: lines in order, each
-  line's position, lines by [section label], sections by label."
+  "Where things are in a document, for matching notes: IGTs in order, each
+  IGT's position, IGTs by [section label], sections by label."
   [doc]
-  (let [lines (vec (:lines doc))]
-    {:lines lines
-     :pos (into {} (map-indexed (fn [i l] [(:id l) i]) lines))
-     :by-id (into {} (map (juxt :id identity) lines))
-     :lines-by-label (group-by (juxt :section :label) (filter :label lines))
+  (let [igts (vec (:igts doc))]
+    {:igts igts
+     :pos (into {} (map-indexed (fn [i l] [(:id l) i]) igts))
+     :by-id (into {} (map (juxt :id identity) igts))
+     :igts-by-label (group-by (juxt :section :label) (filter :label igts))
      :sections (into {} (for [s (:sections doc) :when (:label s)] [(:label s) (:id s)]))}))
 
 (defn- match-note
   "One note matched: the words its groups quote (:members), the words that
   show its number (:marks), and its problems."
-  [{:keys [lines pos by-id lines-by-label sections]} [k note home]]
+  [{:keys [igts pos by-id igts-by-label sections]} [k note home]]
   (let [results (for [g (:groups note)]
-                  (let [{:keys [line problem]} (locate g home lines-by-label sections (:section (by-id home)))]
-                    (if line
-                      (assoc (match-group g line lines pos) :star? (:star? g))
+                  (let [{:keys [igt problem]} (locate g home igts-by-label sections (:section (by-id home)))]
+                    (if igt
+                      (assoc (match-group g igt igts pos) :star? (:star? g))
                       {:problem problem})))
         groups (:groups note)]
     {:key k :home home
@@ -211,8 +211,8 @@
         notes (all-notes doc)
         matched (map #(match-note places %) notes)
         ;; A word's reading order; a note stands at its first mark, else at
-        ;; the end of the line it is written under, else after the text.
-        at (fn [[line-id i]] [(pos line-id) i])
+        ;; the end of the IGT it is written under, else after the text.
+        at (fn [[igt-id i]] [(pos igt-id) i])
         order (fn [{:keys [marks home]}]
                 (cond
                   (seq marks) (first (sort (map at marks)))
@@ -224,11 +224,11 @@
     {:numbers numbers
      :members (into {} (map (juxt :key :members) matched))
      :marks (reduce (fn [acc {:keys [key marks]}]
-                      (reduce (fn [acc [line-id i]]
-                                (update-in acc [line-id i] (fnil conj []) {:key key :n (numbers key)}))
+                      (reduce (fn [acc [igt-id i]]
+                                (update-in acc [igt-id i] (fnil conj []) {:key key :n (numbers key)}))
                               acc (distinct marks)))
                     {} matched)
-     ;; The line under which each note's text is shown.
+     ;; The IGT under which each note's text is shown.
      :shown-under (into {} (for [m matched]
                              [(:key m) (if (seq (:marks m))
                                          (first (first (sort-by at (:marks m))))
@@ -239,12 +239,12 @@
 
 (def ^:private note-indexes
   "`note-index`'s results by document, held weakly. It is asked for once
-  per line of a page, and an edited document is a new key."
+  per IGT of a page, and an edited document is a new key."
   (js/WeakMap.))
 
 (defn note-index
-  "Where a document's notes are: {:numbers {key n} :members {key #{[line-id
-  word]}} :marks {line-id {word [{:key :n}]}} :shown-under {key line-id}
+  "Where a document's notes are: {:numbers {key n} :members {key #{[igt-id
+  word]}} :marks {igt-id {word [{:key :n}]}} :shown-under {key igt-id}
   :problems [diagnostic]}."
   [doc]
   (if (nil? doc)
@@ -265,22 +265,22 @@
   (some (fn [[key note _ path]] (when (= key k) [note path])) (all-notes doc)))
 
 (defn highlighted-words
-  "The words belonging to the notes `keys`, by line: {line-id #{word-index}}."
+  "The words belonging to the notes `keys`, by IGT: {igt-id #{word-index}}."
   [doc keys]
   (let [members (:members (note-index doc))]
-    (reduce (fn [m [line-id i]] (update m line-id (fnil conj #{}) i))
+    (reduce (fn [m [igt-id i]] (update m igt-id (fnil conj #{}) i))
             {}
             (mapcat members keys))))
 
 (defn first-cited
-  "The notes whose text is shown under each line: {line-id #{key}}."
+  "The notes whose text is shown under each IGT: {igt-id #{key}}."
   [doc]
-  (reduce (fn [m [k line-id]] (if line-id (update m line-id (fnil conj #{}) k) m))
+  (reduce (fn [m [k igt-id]] (if igt-id (update m igt-id (fnil conj #{}) k) m))
           {}
           (:shown-under (note-index doc))))
 
 (defn uncited-notes
-  "Keys of the notes shown under no line (they are shown after the text)."
+  "Keys of the notes shown under no IGT (they are shown after the text)."
   [doc]
   (let [{:keys [shown-under numbers]} (note-index doc)]
-    (sort-by numbers (for [[k line-id] shown-under :when (nil? line-id)] k))))
+    (sort-by numbers (for [[k igt-id] shown-under :when (nil? igt-id)] k))))

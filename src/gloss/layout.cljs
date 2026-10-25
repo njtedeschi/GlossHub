@@ -1,5 +1,5 @@
 (ns gloss.layout
-  "Turns a line into display units. Morpheme, root, syllable and elision
+  "Turns an IGT into display units. Morpheme, root, syllable and elision
   boundaries all cut a word into pieces; pieces are grouped by syllable
   inside each word, so scansion marks can sit over exact letters while the
   word stays contiguous. Words joined by a syllable that crosses the word
@@ -97,35 +97,35 @@
 (defn word-layout
   "A word's layout: on each surface it has (always the text), its pieces in
   syllable groups (:syls {surface [...]}). `ranges` and `letters` are the
-  line's, by surface (gloss.model/surface-ranges, surface-letters)."
-  [line i word ranges letters]
+  IGT's, by surface (gloss.model/surface-ranges, surface-letters)."
+  [igt i word ranges letters]
   {:index i
    :word word
    :start (:start (ranges "text"))
    :syls (into {} (for [s model/surfaces
                         :let [text? (= s "text"), segs (model/segs word s)]
                         :when (or text? (seq segs))]
-                    [s (segs-layout segs (ranges s) (letters s) (model/prosody line s)
+                    [s (segs-layout segs (ranges s) (letters s) (model/prosody igt s)
                                     (when text? (:ruby word)) (when text? (:fmt word)))]))})
 
-(defn line-layout
-  "Display units for a line: [{:words [word-layout ...]} ...]. Each word gets
+(defn igt-layout
+  "Display units for an IGT: [{:words [word-layout ...]} ...]. Each word gets
   the note numbers it shows (:note-marks [{:key :n}]), from `marks`, the
-  line's marks by word (gloss.notes/note-index)."
-  [line marks]
-  (let [ranges (into {} (for [s model/surfaces] [s (model/surface-ranges line s)]))
-        letters (into {} (for [s model/surfaces] [s (model/surface-letters line s)]))
+  IGT's marks by word (gloss.notes/note-index)."
+  [igt marks]
+  (let [ranges (into {} (for [s model/surfaces] [s (model/surface-ranges igt s)]))
+        letters (into {} (for [s model/surfaces] [s (model/surface-letters igt s)]))
         ;; Words a syllable crosses into stay with the word before, by the
         ;; surface whose syllables are drawn (the first that has them).
-        scanned (or (first (filter #(model/prosody line %) model/surfaces)) "text")
-        syllables (:syllables (model/prosody line scanned))
+        scanned (or (first (filter #(model/prosody igt %) model/surfaces)) "text")
+        syllables (:syllables (model/prosody igt scanned))
         cross-ranges (ranges scanned)
         crosses? (fn [pos] (some #(< (:start %) pos (:end %)) syllables))
         words (vec (map-indexed
                     (fn [i w]
-                      (assoc (word-layout line i w (into {} (for [[s rs] ranges] [s (get rs i)])) letters)
+                      (assoc (word-layout igt i w (into {} (for [[s rs] ranges] [s (get rs i)])) letters)
                              :note-marks (vec (sort-by :n (get marks i)))))
-                    (:words line)))]
+                    (:words igt)))]
     (reduce (fn [units [w cr]]
               (if (and (seq units) cr (crosses? (:start cr)))
                 (conj (pop units) (update (peek units) :words conj w))

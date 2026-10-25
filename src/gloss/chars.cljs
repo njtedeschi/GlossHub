@@ -1,15 +1,15 @@
 (ns gloss.chars
-  "Characters as the rows read them: punctuation at the edges of a word,
-  backslash escapes, and letters, which is what one row is compared by
+  "Characters as the tiers read them: punctuation at the edges of a word,
+  backslash escapes, and letters, which is what one tier is compared by
   when it is checked against another."
   (:require [clojure.string :as str]
-            [gloss.rows :as rows]))
+            [gloss.tiers :as tiers]))
 
 ;; ---------------------------------------------------------------------------
 ;; Punctuation
 ;;
-;; Punctuation belongs to \text. The other rows ignore it at the edges of
-;; their items.
+;; Punctuation belongs to \text. The other tiers ignore it at the edges of
+;; their entries.
 
 (def lead-punct
   "Punctuation that can open a word: quotation marks, brackets, inverted
@@ -20,19 +20,36 @@
   "Punctuation that can close a word, in several scripts."
   (set ",.;:!?…»”\")·׃—־、。」』）？！"))
 
+(def ^:private closing
+  "Closing brackets, by their opening ones."
+  {")" "(", "）" "（"})
+
+(defn- closes-inside?
+  "Whether `c`, at the end of `s`, closes a bracket opened earlier in `s`,
+  as in the Leipzig eye(N): then it belongs to the entry."
+  [s c]
+  (when-let [open (closing c)]
+    (let [before (subs s 0 (- (count s) (count c)))]
+      (> (count (filter #{open} (map str before)))
+         (count (filter #{c} (map str before)))))))
+
 (defn strip-punct
-  "`s` trimmed, without the punctuation at its edges."
+  "`s` trimmed, without the punctuation at its edges. A closing bracket
+  whose opening one is inside `s` stays."
   [s]
   (let [s (str/trim (str s))
-        s (apply str (drop-while lead-punct (map str s)))
-        s (apply str (reverse (drop-while trail-punct (reverse (map str s)))))]
-    s))
+        s (apply str (drop-while lead-punct (map str s)))]
+    (loop [s s]
+      (let [c (str (last s))]
+        (if (and (trail-punct c) (not (closes-inside? s c)))
+          (recur (subs s 0 (- (count s) (count c))))
+          s)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Escapes
 ;;
 ;; A backslash makes the next punctuation character literal (`well\-known`,
-;; `\*wódr̥`); before a letter or digit it starts a command. While a row is
+;; `\*wódr̥`); before a letter or digit it starts a command. While a tier is
 ;; parsed, each escaped character is replaced by a stand-in from Unicode's
 ;; private use area, so that no markup rule has to know about escapes, and
 ;; the parser puts the characters back once the document is read. When a
@@ -57,7 +74,7 @@
 (def ^:private apostrophes #{"'" "’" "ʼ"})
 
 ;; Stand-ins are given out as characters are first escaped, and stay the same
-;; for the session, so every row of a document agrees on them.
+;; for the session, so every tier of a document agrees on them.
 (defonce ^:private stand-ins (atom {}))
 
 (defonce ^:private originals (atom {}))
@@ -93,7 +110,7 @@
     :else x))
 
 (defn escapes-as-written
-  "Item `s` (escapes hidden) with its escapes written back as backslashes,
+  "Entry `s` (escapes hidden) with its escapes written back as backslashes,
   as it was typed, so that it can be stored and parsed again."
   [s]
   (when s
@@ -101,18 +118,18 @@
 
 (def reserved
   "Characters of a standard keyboard that have to be escaped to be part of a
-  word of \\text (gloss.rows): some are markup, the rest are kept for markup
+  word of \\text (gloss.tiers): some are markup, the rest are kept for markup
   to come."
-  (rows/escapes "text"))
+  (tiers/escapes "text"))
 
 (def unused-reserved
   "Reserved characters with no meaning in \\text yet."
   (set "`~@#$%^&=<>"))
 
 (defn escape-char
-  "Character `c`, at index `i` of an item `n` characters long, as written
+  "Character `c`, at index `i` of an entry `n` characters long, as written
   out: with a backslash when it is in `markup`, or when it is punctuation
-  at the item's edge, which would otherwise be read as the item's own
+  at the entry's edge, which would otherwise be read as the entry's own
   punctuation."
   [markup c i n]
   (if (or (markup c)
@@ -122,7 +139,7 @@
     c))
 
 (defn escape
-  "`s` written out for a row whose markup is `markup`: see `escape-char`."
+  "`s` written out for a tier whose markup is `markup`: see `escape-char`."
   [markup s]
   (let [cs (mapv str (str s)), n (count cs)]
     (apply str (map-indexed #(escape-char markup %2 %1 n) cs))))
@@ -130,10 +147,10 @@
 ;; ---------------------------------------------------------------------------
 ;; Letters
 ;;
-;; Rows are checked against \text (or \translit) letter by letter. A letter is
-;; a base character with its combining marks; it is compared without its
-;; diacritics and case, and apostrophes (' ’ ʼ) are all the same letter.
-;; Anything else (punctuation, escaped characters) is skipped.
+;; Tiers are checked against \text (or \text[translit]) letter by letter. A
+;; letter is a base character with its combining marks; it is compared
+;; without its diacritics and case, and apostrophes (' ’ ʼ) are all the same
+;; letter. Anything else (punctuation, escaped characters) is skipped.
 
 (defn- combining?
   "Whether `c` is a combining mark: Latin and Greek diacritics (macron,
@@ -169,8 +186,14 @@
   [s]
   (filterv :letter? (letter-clusters s)))
 
+(defn letter-index
+  "How many of the letters `cl` (from `letters-of`) start before offset
+  `p`: the index of the letter at `p`, if one starts there."
+  [cl p]
+  (count (take-while #(< (:start %) p) cl)))
+
 (defn first-mismatch
-  "Where two rows' letters (from `letters-of`) first differ: the index of
+  "Where two tiers' letters (from `letters-of`) first differ: the index of
   the first letter that isn't the same, or where the shorter one ends; nil
   when they spell the same letters."
   [as bs]

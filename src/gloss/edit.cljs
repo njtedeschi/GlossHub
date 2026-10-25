@@ -1,22 +1,22 @@
 (ns gloss.edit
   "Edits: pure functions from a document to a document, used by the
-  website's editors (a cell, a line's source, a note's text)."
+  website's editors (a cell, an IGT's source, a note's text)."
   (:require [clojure.string :as str]
             [gloss.chars :as chars]
             [gloss.model :as model]
             [gloss.morph :as morph]
             [gloss.notes :as notes]))
 
-(defn update-line
-  "The document with line `line-id` replaced by (f line & args)."
-  [doc line-id f & args]
-  (if-let [i (model/line-index doc line-id)]
-    (apply update-in doc [:lines i] f args)
+(defn update-igt
+  "The document with IGT `igt-id` replaced by (f igt & args)."
+  [doc igt-id f & args]
+  (if-let [i (model/igt-index doc igt-id)]
+    (apply update-in doc [:igts i] f args)
     doc))
 
 (defn- set-translit
   "A word with its transliteration (plain text) set, divided again by its
-  \\morph[translit] item."
+  \\morph[translit] entry."
   [word text]
   (let [core (chars/strip-punct (chars/hide-escapes text))
         result (morph/segment-word core (some-> (model/morph-src word "translit") chars/hide-escapes))]
@@ -24,21 +24,21 @@
                :segs (chars/restore-escapes (:segs result))
                :morph-problems (morph/segment-problems result))))
 
-(defn set-item
-  "Sets word `i`'s item in row `row` (\\translit or a gloss.rows/word-items
-  row) from the text typed for it."
-  [doc line-id i row text]
-  (update-line doc line-id update-in [:words i]
-               (fn [word]
-                 (if (= row "translit")
-                   (set-translit word text)
-                   (let [[fields] (model/read-item row (chars/hide-escapes text))]
-                     (model/put-fields word (chars/restore-escapes fields)))))))
+(defn set-entry
+  "Sets word `i`'s entry in tier `tier` (\\text[translit] or a
+  gloss.tiers/word-entries tier) from the text typed for it."
+  [doc igt-id i tier text]
+  (update-igt doc igt-id update-in [:words i]
+              (fn [word]
+                (if (= tier "translit")
+                  (set-translit word text)
+                  (let [[fields] (model/read-entry tier (chars/hide-escapes text))]
+                    (model/put-fields word (chars/restore-escapes fields)))))))
 
 (defn set-free
-  "Sets a line's free translation."
-  [doc line-id text]
-  (update-line doc line-id assoc :free (str/trim text)))
+  "Sets an IGT's free translation."
+  [doc igt-id text]
+  (update-igt doc igt-id assoc :free (str/trim text)))
 
 (defn set-note
   "Sets the text of the note with key `k`."
@@ -48,31 +48,31 @@
     doc))
 
 (defn- in-section
-  "Lines (just parsed) as lines of `section`, where they are put."
-  [section new-lines]
-  (map #(cond-> (dissoc % :section) section (assoc :section section)) new-lines))
+  "IGTs (just parsed) as IGTs of `section`, where they are put."
+  [section new-igts]
+  (map #(cond-> (dissoc % :section) section (assoc :section section)) new-igts))
 
-(defn replace-line
-  "Replaces a line with parsed lines (a block can yield several, each with
+(defn replace-igt
+  "Replaces an IGT with parsed IGTs (a block can yield several, each with
   the notes written under it)."
-  [doc line-id new-lines]
-  (let [i (model/line-index doc line-id)
-        lines (:lines doc)]
-    (assoc doc :lines (vec (concat (subvec lines 0 i)
-                                   (in-section (get-in lines [i :section]) new-lines)
-                                   (subvec lines (inc i)))))))
+  [doc igt-id new-igts]
+  (let [i (model/igt-index doc igt-id)
+        igts (:igts doc)]
+    (assoc doc :igts (vec (concat (subvec igts 0 i)
+                                  (in-section (get-in igts [i :section]) new-igts)
+                                  (subvec igts (inc i)))))))
 
-(defn insert-lines
-  "Inserts lines after line `after-idx` (or at the end), in that line's
+(defn insert-igts
+  "Inserts IGTs after IGT `after-idx` (or at the end), in that IGT's
   section."
-  [doc after-idx new-lines]
-  (let [lines (:lines doc)
-        at (if after-idx (inc after-idx) (count lines))]
-    (assoc doc :lines (vec (concat (subvec lines 0 at)
-                                   (in-section (:section (get lines (dec at))) new-lines)
-                                   (subvec lines at))))))
+  [doc after-idx new-igts]
+  (let [igts (:igts doc)
+        at (if after-idx (inc after-idx) (count igts))]
+    (assoc doc :igts (vec (concat (subvec igts 0 at)
+                                  (in-section (:section (get igts (dec at))) new-igts)
+                                  (subvec igts at))))))
 
-(defn delete-line
-  "Removes line `line-id`."
-  [doc line-id]
-  (update doc :lines (fn [ls] (vec (remove #(= line-id (:id %)) ls)))))
+(defn delete-igt
+  "Removes IGT `igt-id`."
+  [doc igt-id]
+  (update doc :igts (fn [ls] (vec (remove #(= igt-id (:id %)) ls)))))

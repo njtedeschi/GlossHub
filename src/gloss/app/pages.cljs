@@ -1,9 +1,16 @@
 (ns gloss.app.pages
   "The section pages: Texts, Guide, About and Settings."
   (:require [clojure.string :as str]
+            [gloss.app.markdown :as md]
+            [gloss.app.markdown-pages :as md-pages]
             [gloss.app.state :as state]
             [gloss.app.ui :as ui]
-            [gloss.render :as render]))
+            [gloss.check :as check]
+            [gloss.english :as english]
+            [gloss.model :as model]
+            [gloss.parse :as parse]
+            [gloss.render :as render]
+            [gloss.serialize :as ser]))
 
 (defn published-page
   "The Texts page, Published tab: the published texts."
@@ -50,7 +57,7 @@
               [:button.small {:on {:click [:doc/duplicate [:id id]]}} "Duplicate"]
               (ui/confirm-button s [:doc id] [:doc/delete id] "Delete" "Click again to delete")]]
             [:p (if (str/blank? (:about doc))
-                  (let [n (count (:lines doc))] (str n (if (= 1 n) " line" " lines")))
+                  (english/counted (count (:igts doc)) "IGT" "IGTs")
                   (render/prose (:about doc)))]])]
         [:p.hint-block (if (seq @state/library)
                          "None yet. Start one with New, or duplicate a published text."
@@ -58,24 +65,123 @@
       [:p.hint-block "My texts, and your edits to published texts, are saved in this browser
                       only. Use Export on a text’s page to keep a copy."]])))
 
-(defn guide-page
-  "The Guide: a placeholder for now."
+(def example-view
+  "Display settings for live examples: fixed, so every example shows what
+  it is about whatever the reader's own settings are."
+  (merge state/default-view {:pos :full :stems :underline}))
+
+(defn- live-example
+  "A live example on a Markdown page: its source beside the result, and its
+  caption (where it comes from) below them. The source can be edited to try
+  changes; the draft is kept under the page's `address` and the example's
+  number `i` (guide-notes:1)."
+  [s address {:keys [text info caption]} i]
+  (let [id (str address ":" i)
+        draft (get-in s [:example-drafts id])
+        src (or draft text)
+        {:keys [doc] :as parsed} (parse/parse-document src model/format-version)
+        problems (check/problems parsed)
+        ctx (assoc (render/context doc example-view {}) :read? true :hl-keys (set (:note-highlight s)))]
+    [:figure.example
+     [:div.example-source
+      (if draft
+        [:textarea.source.example-input {:value draft
+                                         :rows (inc (count (str/split-lines draft)))
+                                         :spellcheck "false"
+                                         :aria-label "Example source"
+                                         :on {:input [:example/draft id]}}]
+        [:pre.example-code [:code src]])
+      [:div.example-actions
+       (if draft
+         [:button.small {:on {:click [:example/reset id]}} "Reset"]
+         [:button.small {:on {:click [:example/edit [id text]]}} "Edit this example"])
+       (when (str/includes? info "broken") [:span.hint "This example shows a problem on purpose."])]]
+     [:div.example-result
+      (render/legend ctx)
+      (render/igts-view ctx)
+      (render/end-notes ctx)
+      (render/diagnostics-view problems)]
+     (when caption [:figcaption.example-caption (md/inline caption)])]))
+
+(defn- tier-grid
+  "A figure on a Markdown page (```gloss grid): an IGT's source laid out
+  with a row for each tier and a column for each word
+  (gloss.serialize/igt-grid)."
+  [text]
+  (let [doc (:doc (parse/parse-document text model/format-version))]
+    [:figure.tier-grid
+     [:table {:dir (:dir doc)}
+      [:tbody
+       (for [[command cells] (ser/igt-grid (first (:igts doc)))]
+         [:tr
+          [:th {:scope "row"} (str "\\" command)]
+          (for [{:keys [text span]} cells]
+            [:td {:colspan (when (> span 1) span)} text])])]]]))
+
+(defn- markdown-page
+  "A Markdown page (gloss.app.markdown-pages): its title, then its body,
+  with its live examples. `before` goes above the title, `after` below the
+  body."
+  ([s page] (markdown-page s page nil nil))
+  ([s {:keys [address title body]} before after]
+   (ui/shell s
+    [:main
+     before
+     [:h1.title title]
+     [:div.markdown-body
+      (md/render body (fn [{:keys [info text] :as b} n]
+                        (cond
+                          (= info "gloss grid") (tier-grid text)
+                          (str/starts-with? info "gloss") (live-example s address b n)
+                          :else [:pre [:code text]])))]
+     after])))
+
+(defn- guide-index
+  "The Guide's first page: its pages, group by group."
   [s]
   (ui/shell s
-   [:main.prose-page
+   [:main.guide
     [:h1.title "Guide"]
-    [:p.about "This page is forthcoming."]]))
+    [:p.about "Short pages, grouped by topic. Start with " [:em "Getting started"] "; after that,
+               each page stands on its own. Every example is live: it shows its source with the
+               result, and you can edit the source to try things out."]
+    (for [{:keys [title pages]} md-pages/groups]
+      [:section.guide-group
+       [:h2 title]
+       [:ul.guide-pages
+        (for [{:keys [address title description]} pages]
+          [:li
+           [:a.library-title {:href (str "#" address)} title]
+           (when description [:p (md/inline description)])])]])]))
+
+(defn- guide-article
+  "One page of the Guide: the Markdown page, with its group above it and
+  links to the other pages in its group below."
+  [s slug]
+  (let [page (md-pages/by-slug slug)
+        group (md-pages/group-of page)
+        others (remove #(= slug (:slug %)) (:pages group))]
+    (markdown-page
+     s page
+     [:p.guide-crumb [:a {:href "#guide"} "Guide"] (str " · " (:title group))]
+     (when (seq others)
+       [:nav.guide-more {:aria-label (str "More in " (:title group))}
+        [:span.guide-more-label (str "More in " (:title group) ":")]
+        [:ul
+         (for [{:keys [address title]} others]
+           [:li [:a {:href (str "#" address)} title]])]]))))
+
+(defn guide-page
+  "The Guide: its index, or the page the route names."
+  [s]
+  (if-let [slug (get-in s [:route :guide-page])]
+    (guide-article s slug)
+    (guide-index s)))
 
 (defn about-page
-  "The About page: a placeholder for now, with the one thing readers need
-  to know before typing."
+  "The About page: the Markdown page pages/about.md."
   [s]
-  (ui/shell s
-   [:main.prose-page
-    [:h1.title "About"]
-    [:p.about "This page is forthcoming."]
-    [:p "Your texts are saved only in this browser. To keep a copy, use "
-     [:strong "Export everything"] " in " [:a {:href "#settings"} "Settings"] "."]]))
+  (markdown-page s md-pages/about))
 
 (def ^:private all-features
   "Every kind of content a text can have, as far as display defaults go (the
@@ -88,8 +194,8 @@
   Display options box, for every kind of content."
   [s]
   (let [view (:view s)
-        site-defaults? (= (dissoc view :layer-orders :display-open?)
-                          (dissoc state/default-view :layer-orders :display-open?))]
+        site-defaults? (= (dissoc view :row-orders :display-open?)
+                          (dissoc state/default-view :row-orders :display-open?))]
     [:section.box.display-box.defaults-box {:aria-label "Default display options"}
      [:div.display-title [:strong "Default display options"]]
      [:div.display-head
@@ -114,8 +220,7 @@
   "The Settings page: appearance, texts, display defaults, saved data."
   [s]
   (let [n-own (count (:docs s))
-        n-edited (count (:overrides s))
-        plural (fn [n one many] (str n " " (if (= 1 n) one many)))]
+        n-edited (count (:overrides s))]
     (ui/shell s
      [:main
       [:h1.title "Settings"]
@@ -136,8 +241,8 @@
        [:button {:on {:click [:settings/reset-view]}} "Reset display options for every text"]]
       [:section.settings-section
        [:h2 "Your data"]
-       [:p "Saved in this browser: " (plural n-own "text" "texts") " of your own, "
-        (plural n-edited "edited published text" "edited published texts") ". "
+       [:p "Saved in this browser: " (english/counted n-own "text" "texts") " of your own, "
+        (english/counted n-edited "edited published text" "edited published texts") ". "
         "Each text can be exported from its page, or all of them at once, as a backup."]
        [:div.editor-actions
         [:button {:on {:click [:data/export]}

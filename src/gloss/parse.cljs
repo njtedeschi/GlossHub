@@ -1,21 +1,22 @@
 (ns gloss.parse
   "Reads the plain-text input format (docs/format.md) into a document
   (gloss.model). Parsing never fails: every problem becomes a diagnostic
-  {:level :msg :source-line …}, and rows that can't be aligned are kept as
-  written under the line's :raw key, so nothing typed is lost.
+  {:level :msg :source-line …}, and tiers that can't be aligned are kept as
+  written under the IGT's :raw key, so nothing typed is lost.
 
   The entry points are `parse-document`, for a whole text, and
-  `parse-lines`, for line blocks alone (the line editor). The \\text row and
-  the prosody rows have namespaces of their own (gloss.parse.text,
+  `parse-igts`, for IGT blocks alone (an IGT's source editor). The \\text tier
+  and the syllable tiers have namespaces of their own (gloss.parse.text,
   gloss.parse.prosody)."
   (:require [clojure.string :as str]
             [gloss.chars :as chars]
+            [gloss.english :as english]
             [gloss.formatting :as fmt]
             [gloss.model :as model]
             [gloss.morph :as morph]
             [gloss.parse.prosody :as prosody]
             [gloss.parse.text :as text]
-            [gloss.rows :as rows]))
+            [gloss.tiers :as tiers]))
 
 ;; ---------------------------------------------------------------------------
 ;; Source text and ids
@@ -28,7 +29,7 @@
   (-> (str s) (.normalize "NFC") (str/replace "\r" "")))
 
 (defn new-id
-  "A new id for a line or section: random, so that ids from separate
+  "A new id for an IGT or section: random, so that ids from separate
   parses don't collide."
   []
   (str "l" (subs (str (random-uuid)) 0 8)))
@@ -36,11 +37,18 @@
 ;; ---------------------------------------------------------------------------
 ;; Fields
 
+(defn- command-name
+  "A command as typed, by its standard name: a tier's (gloss.tiers), or
+  \\igt for its short form \\ex. Other commands are kept, in lowercase."
+  [s]
+  (let [m (tiers/standard-name s)]
+    (if (= "ex" m) "igt" m)))
+
 (defn- field-lines
-  "Splits source into fields {:marker :value :source-line}. Lines that
-  don't start with a marker continue the previous field; `%` lines are
-  comments. Markers are read by their standard name (gloss.rows), so any
-  accepted name works."
+  "Splits source into fields {:command :written :value :source-line}. Lines
+  that don't start with a command continue the previous field; `%` lines
+  are comments. Commands are read by their standard name (`command-name`), so
+  any accepted name works; :written is the name as typed, in lowercase."
   [src]
   (reduce
    (fn [fields [i raw]]
@@ -49,22 +57,22 @@
          (str/blank? line) fields
          (str/starts-with? (str/triml line) "%") fields
          :else
-         (if-let [[_ marker opt value] (re-matches #"\s*\\([A-Za-z]+)(?:\[([^\]]*)\])?(?:\s+(.*))?" line)]
-           (conj fields (cond-> {:marker (rows/row-name marker)
+         (if-let [[_ command opt value] (re-matches #"\s*\\([A-Za-z]+)(?:\[([^\]]*)\])?(?:\s+(.*))?" line)]
+           (conj fields (cond-> {:command (command-name command) :written (str/lower-case command)
                                  :value (or value "") :source-line (inc i)}
                           opt (assoc :opt (str/trim opt))))
            (if (seq fields)
              (update-in fields [(dec (count fields)) :cont] (fnil conj []) (str/trim line))
-             (conj fields {:marker nil :value line :source-line (inc i)}))))))
+             (conj fields {:command nil :value line :source-line (inc i)}))))))
    []
    (map-indexed vector (str/split-lines (normalize src)))))
 
 (defn- field-value
   "A field's full value. Prose fields keep line breaks and are taken as
-  written; other rows join continuation lines with spaces, and their
+  written; other tiers join continuation lines with spaces, and their
   escapes are hidden until the document is read (gloss.chars/hide-escapes)."
-  [{:keys [marker value cont]}]
-  (let [prose? (#{"ft" "note" "about"} marker)
+  [{:keys [command value cont]}]
+  (let [prose? (#{"ft" "note" "about"} command)
         v (str/trim (str/join (if prose? "\n" " ") (cons value cont)))]
     (if prose? v (chars/hide-escapes v))))
 
@@ -72,8 +80,8 @@
 ;; Braced tokens: {the sailor} {} sings
 
 (defn tokenize-braced
-  "The items of a row: split at spaces, except inside braces, which make
-  their contents one item ({the sailor}); {} is an empty item."
+  "The entries of a tier: split at spaces, except inside braces, which make
+  their contents one entry ({the sailor}); {} is an empty entry."
   [s]
   (loop [cs (seq s), cur nil, depth 0, out []]
     (if-let [c (first cs)]
@@ -87,13 +95,19 @@
         :else (recur (rest cs) (str cur c) depth out))
       (if cur (conj out cur) out))))
 
+(defn- entries
+  "A tier's entries in its value `v`, one per word: braces group, + (a
+  subline break, which belongs to \\text) is skipped."
+  [v]
+  (remove #{"+"} (tokenize-braced v)))
+
 ;; ---------------------------------------------------------------------------
 ;; Notes
 
 (defn- parse-group
   "A note's group, the text inside its braces (escapes hidden):
   `@section/label* words`, or `a … b` for a span; a quote may end with
-  #n (`a#2`), its nth place in the line."
+  #n (`a#2`), its nth place in the IGT."
   [g]
   (let [[_ section label star body] (re-matches #"(?s)^\s*(?:@(?:([^\s/*]+)/)?([^\s*]+))?(\*)?\s*(.*?)\s*$" g)
         ws (str/split body #"\s+")
@@ -114,7 +128,7 @@
       star (assoc :star? true))))
 
 (defn parse-note
-  "`\\note[tag] {group} {group} text`: the tag (from the marker's option),
+  "`\\note[tag] {group} {group} text`: the tag (from the command's option),
   the groups in braces, then the note's text (prose, as written)."
   [tag v]
   (loop [s (chars/hide-escapes v), groups []]
@@ -129,99 +143,103 @@
   (parse-note (:opt f) (field-value f)))
 
 ;; ---------------------------------------------------------------------------
-;; Reserved markers
+;; Reserved commands
 ;;
-;; Markers the format reserves but the site doesn't support yet. Their rows
+;; Commands the format reserves but the site doesn't support yet. Their fields
 ;; are kept as written (and written back out), so nothing typed is lost and
-;; the markers can be supported later without changing what texts mean.
+;; the commands can be supported later without changing what texts mean.
 
 (def unsupported
-  "Reserved markers: parallel rows (\\row[code] …, named in the header with
+  "Reserved commands: parallel tiers (\\row[code] …, named in the header with
   \\rowname[code] …)."
   #{"row" "rowname"})
 
 (defn- keep-unsupported
-  "The reserved-marker fields among `fields`, kept verbatim, with a warning
-  for each. Returns {:kept [{:marker :opt :text}] :diagnostics}."
+  "The reserved-command fields among `fields`, kept verbatim, with a warning
+  for each. Returns {:kept [{:command :opt :text}] :diagnostics}."
   [fields]
-  (let [fs (filter #(unsupported (:marker %)) fields)]
-    {:kept (vec (for [{:keys [marker opt value cont]} fs]
-                  (cond-> {:marker marker :text (str/trim (str/join " " (cons value cont)))}
+  (let [fs (filter #(unsupported (:command %)) fields)]
+    {:kept (vec (for [{:keys [command opt value cont]} fs]
+                  (cond-> {:command command :text (str/trim (str/join " " (cons value cont)))}
                     opt (assoc :opt opt))))
      :diagnostics (vec (for [f fs]
                          {:level :warning :source-line (:source-line f)
-                          :msg (str "\\" (:marker f) " isn't supported yet. The row is kept as written "
+                          :msg (str "\\" (:command f) " isn't supported yet. It is kept as written "
                                     "but not shown.")}))}))
 
 ;; ---------------------------------------------------------------------------
-;; Rows: items, characters and options
+;; Tiers: entries, characters and options
 
 (defn- assign-by-word
-  "Distributes a row's items over the words, one each: `put` takes a word
-  and its item and returns the word. `marker` names the row in problems.
+  "Distributes a tier's entries over the words, one each: `put` takes a word
+  and its entry and returns the word. `command` names the tier in problems.
   Returns [words diagnostics]."
-  [words tokens put marker]
-  (let [nw (count words), nt (count tokens)]
-    [(vec (map-indexed (fn [i w] (if (< i nt) (put w (nth tokens i)) w)) words))
+  [words entries put command]
+  (let [nw (count words), ne (count entries)
+        has (str "The " command " tier has " (english/counted ne "entry" "entries")
+                 " for " (english/counted nw "word" "words") "; ")]
+    [(vec (map-indexed (fn [i w] (if (< i ne) (put w (nth entries i)) w)) words))
      (cond
-       (< nt nw) [{:level :warning
-                   :msg (str "The " marker " row has " nt " item(s) for " nw " words; the last "
-                             (- nw nt) " word(s) are left without one.")}]
-       (> nt nw) [{:level :error
-                   :msg (str "The " marker " row has " nt " item(s) for " nw " words; extra item(s) “"
-                             (str/join " " (drop nw tokens)) "” are dropped. "
-                             "Use {braces} for multi-word glosses.")}]
+       (< ne nw) (let [n (- nw ne)]
+                   [{:level :warning
+                     :msg (str has (if (= 1 n) "the last word is" (str "the last " n " words are"))
+                               " left without one.")}])
+       (> ne nw) (let [one? (= 1 (- ne nw))]
+                   [{:level :error
+                     :msg (str has (if one? "the extra entry “" "the extra entries “")
+                               (str/join " " (drop nw entries)) (if one? "” is" "” are") " dropped. "
+                               "Use {braces} for an entry of several words.")}])
        :else [])]))
 
 (def ^:private header-prose
-  "Header rows read as prose, which reserve nothing (but a stray backslash)."
+  "Header fields read as prose, which reserve nothing (but a stray backslash)."
   #{"about" "title"})
 
-(defn- base-row
-  "The row a row key belongs to: \"morph[translit]\" is a \\morph row."
+(defn- base-tier
+  "The tier a tier key belongs to: \"morph[translit]\" is a \\morph tier."
   [k]
   (str/replace k "[translit]" ""))
 
 (defn- checked?
-  "Whether a row's characters are checked here, against gloss.rows: \\text
+  "Whether a tier's characters are checked here, against gloss.tiers: \\text
   and \\morph check their own as they are read."
   [k]
-  (let [b (base-row k)]
+  (let [b (base-tier k)]
     (and (not (#{"text" "morph"} b))
-         (or (rows/by-name b) (header-prose b)))))
+         (or (tiers/by-name b) (header-prose b)))))
 
 (defn- whole-value?
-  "Whether a row's value is checked whole rather than item by item."
+  "Whether a tier's value is checked whole rather than entry by entry."
   [b]
-  (or (header-prose b) (#{"scan" "syl"} b) (:prose? (rows/by-name b))))
+  (or (header-prose b) (#{"scan" "syl"} b) (:prose? (tiers/by-name b))))
 
-(defn- row-chars
-  "The reserved characters and backslashes in a row's value (escapes
-  hidden): {[char command] [item …]}."
+(defn- tier-chars
+  "The reserved characters and backslashes in a tier's value (escapes
+  hidden): {[char command] [entry …]}."
   [k v]
-  (let [b (base-row k)
-        items (cond
-                (whole-value? b) [v]
-                (= b "glword") (map #(:text (fmt/read-cell (chars/strip-punct %))) (remove #{"+"} (tokenize-braced v)))
-                :else (map chars/strip-punct (remove #{"+"} (tokenize-braced v))))
+  (let [b (base-tier k)
+        entries (cond
+                  (whole-value? b) [v]
+                  (= b "glword") (map #(:text (fmt/read-glword (chars/strip-punct %))) (entries v))
+                  :else (map chars/strip-punct (entries v)))
         reserved? (if (= b "scan")
                     (fn [c] (and (not= c "\\") (seq (:bad (prosody/parse-scan c)))))
-                    (fn [c] (rows/reserved? b c)))]
-    (reduce (fn [acc item]
-              (reduce (fn [acc key] (update acc key (fnil conj []) item)) acc
+                    (fn [c] (tiers/reserved? b c)))]
+    (reduce (fn [acc entry]
+              (reduce (fn [acc key] (update acc key (fnil conj []) entry)) acc
                       (distinct (concat
-                                 (for [[_ cmd] (re-seq #"\\([0-9A-Za-z]*)" item)] ["\\" cmd])
-                                 (for [c (map str item) :when (reserved? c)] [c nil])))))
-            {} items)))
+                                 (for [[_ cmd] (re-seq #"\\([0-9A-Za-z]*)" entry)] ["\\" cmd])
+                                 (for [c (map str entry) :when (reserved? c)] [c nil])))))
+            {} entries)))
 
 (defn char-problems
   "Warnings for reserved characters and for backslashes that escape nothing
-  in a row's value (escapes hidden), one per character, naming the items
+  in a tier's value (escapes hidden), one per character, naming the entries
   it is in."
   [k v]
-  (let [found (row-chars k v)
-        name (str "\\" k)
-        b (base-row k)]
+  (let [found (tier-chars k v)
+        name (str "\\" (tiers/command k))
+        b (base-tier k)]
     (for [[[c cmd] in] (sort-by (comp str first) found)
           :let [where (when-not (whole-value? b)
                         (str " (in " (str/join ", " (map #(str "“" % "”") (distinct in))) ")"))]]
@@ -234,214 +252,270 @@
                                 "' or | (a foot) and || (a caesura).")
               :else (str "“" c "”" where " is reserved in " name "; write \\" c " for a literal “" c "”."))})))
 
-(def ^:private row-options
-  "Markers that take an option, and the options they take (:any for a
-  note's tag)."
-  {"morph" #{"text" "translit"} "syl" #{"text" "translit"} "note" :any})
+(defn- gloss-start-problems
+  "Warnings for \\glmorph entries (escapes hidden) that start with a
+  separator before their gloss: that is reserved for a word written apart
+  but glossed with the word before it (Leipzig Rule 2A; docs/format.md
+  §8)."
+  [v]
+  (for [[c in] (group-by #(subs % 0 1)
+                         (distinct (filter #(re-find #"^[-=~]." %) (map chars/strip-punct (entries v)))))]
+    {:level :warning
+     :msg (str "A gloss can't start with “" c "” (" (str/join ", " (map #(str "“" % "”") in))
+               "): that is reserved for a word written apart from the word it belongs to."
+               " Write \\" c " for a literal “" c "”.")}))
 
-(defn- row-key
-  "The row a field is: its marker, with the option for rows of the
-  transliteration (\\morph[translit] is \"morph[translit]\")."
-  [{:keys [marker opt]}]
-  (if (= opt "translit") (str marker "[translit]") marker))
+(def ^:private tier-options
+  "Commands that take an option, and the options they take, in the order
+  they are listed (:any for a note's tag)."
+  {"text" (filterv tiers/text-options tiers/rows)
+   "morph" ["translit"] "syl" ["translit"] "note" :any})
+
+(defn- option
+  "A field's option as read (gloss.tiers/option). A note's option is its
+  tag, taken as written."
+  [{:keys [command opt]}]
+  (if (= "note" command) opt (tiers/option opt)))
+
+(defn- tier-key
+  "The tier a field is: its command, with the option that names the text
+  tier. \\text[translit] is the transliteration (\"translit\") and
+  \\morph[translit] its morphemes (\"morph[translit]\"); version 1's
+  commands (\\translit, \\morph[text]) are the same tiers."
+  [{:keys [command] :as f}]
+  (let [opt (option f)]
+    (cond
+      (and (= "text" command) (tiers/text-options opt)) opt
+      (and (#{"morph" "syl"} command) (= "translit" opt)) (str command "[translit]")
+      :else command)))
 
 (defn- option-problems
-  "Options that the fields' markers don't take."
+  "Options that the fields' commands don't take."
   [fields]
-  (for [{:keys [marker opt source-line]} fields
-        :when (and opt (not (unsupported marker))
-                   (not= :any (get row-options marker))
-                   (not (contains? (get row-options marker) opt)))]
+  (for [{:keys [command opt source-line] :as f} fields
+        :let [ok (get tier-options command)]
+        :when (and (option f) (not (unsupported command)) (not= :any ok)
+                   (not (some #{(option f)} ok)))]
     {:level :warning :source-line source-line
-     :msg (str "\\" marker "[" opt "]: "
-               (if-let [ok (get row-options marker)]
-                 (str "the option must be " (str/join " or " (sort ok)) ".")
-                 (str "\\" marker " takes no options; options are reserved.")))}))
+     :msg (str "\\" command "[" opt "]: "
+               (if ok
+                 (str "the option must be " (english/or-list ok) ".")
+                 (str "\\" command " takes no options; options are reserved.")))}))
 
-(def ^:private line-markers
-  "The markers a line block may contain."
-  (conj (set (map :name rows/rows)) "ex"))
+(defn- version-1-form
+  "How format version 2 writes a field written with a command or option of
+  version 1 (\\translit as \\text[translit], \\tl as \\text[tl], \\morph[text]
+  as \\morph), or nil when it is written as version 2 writes it."
+  [{:keys [command opt written]}]
+  (cond
+    ;; A text tier's command of version 1, by any of its names, is now an option.
+    (tiers/text-options command) (str "text[" written "]")
+    (and (= "text" (some-> opt str/lower-case)) (not= "note" command)) command))
+
+(defn- version-1-problems
+  "In a text of format version 2 or later, the fields written as version 1
+  wrote them: read the same, but flagged with how they are written now."
+  [fields version]
+  (when (>= version 2)
+    (for [{:keys [written opt source-line] :as f} fields
+          :let [now (version-1-form f)]
+          :when now]
+      {:level :warning :source-line source-line
+       :msg (str "\\" written (when opt (str "[" opt "]")) " is now written \\" now ".")})))
+
+(def ^:private igt-commands
+  "The commands an IGT block may contain."
+  (conj (set (map :name tiers/tiers)) "igt"))
 
 ;; ---------------------------------------------------------------------------
-;; A line block
+;; An IGT block
 ;;
-;; `parse-block` reads a line's rows in steps: the text first (its words are
-;; what every other row aligns with), then the rows with an item per word,
-;; the syllables, and finally the problems with the fields themselves. Each
-;; step gets the block's context and returns what it read with its
-;; problems, already pointing at their source rows.
+;; `parse-block` reads an IGT's tiers in steps: the text first (its words
+;; are what every other tier aligns with), then the tiers with an entry per
+;; word, the syllables, and finally the problems with the fields
+;; themselves. Each step gets the block's context and returns what it read
+;; with its problems, already pointing at their source lines.
 
 (defn- block-context
-  "What the steps need: each row's value and source line, by row key (the
-  first field of each row counts)."
+  "What the steps need: each tier's value and source line, by tier key (the
+  first field of each tier counts)."
   [fields]
-  (let [firsts (reverse (filter :marker fields))]
+  (let [firsts (reverse (filter :command fields))]
     {:fields fields
-     :values (into {} (for [f firsts] [(row-key f) (field-value f)]))
-     :source-lines (merge {"ex" (:source-line (first fields))}
-                          (into {} (for [f firsts] [(row-key f) (:source-line f)])))}))
+     :values (into {} (for [f firsts] [(tier-key f) (field-value f)]))
+     :source-lines (merge {"igt" (:source-line (first fields))}
+                          (into {} (for [f firsts] [(tier-key f) (:source-line f)])))}))
 
 (defn- value
-  "The value of row `k` in the block, or nil if it has none."
+  "The value of tier `k` in the block, or nil if it has none."
   [ctx k]
   (get-in ctx [:values k]))
 
 (defn- at-source-line
-  "Problems of row `k`, pointing at its source line (or the block's)."
+  "Problems of tier `k`, pointing at its source line (or the block's)."
   [ctx k ds]
   (let [lines (:source-lines ctx)]
-    (map #(assoc % :source-line (or (lines k) (lines "ex"))) ds)))
-
-(defn- items
-  "A row's items, one per word: braces group, + (a subline break, which
-  belongs to \\text) is skipped."
-  [ctx k]
-  (remove #{"+"} (tokenize-braced (value ctx k))))
+    (map #(assoc % :source-line (or (lines k) (lines "igt"))) ds)))
 
 (defn- read-translit
   "The transliteration, a surface: each word as written, without its
   punctuation, until \\morph[translit] divides it."
   [ctx words]
   (if (value ctx "translit")
-    (let [[ws ds] (assign-by-word words (items ctx "translit")
+    (let [[ws ds] (assign-by-word words (entries (value ctx "translit"))
                                   #(assoc-in %1 [:surfaces "translit" :segs] (morph/whole-word (chars/strip-punct %2)))
-                                  "\\translit")]
+                                  (str "\\" (tiers/command "translit")))]
       [ws (at-source-line ctx "translit" ds)])
     [words []]))
 
 (defn- segment-word
-  "A word divided on surface `s` by its item of the surface's \\morph row."
-  [word s item]
-  (let [result (morph/segment-word (model/surface-word word s) item)]
+  "A word divided on surface `s` by its entry of the surface's \\morph tier."
+  [word s entry]
+  (let [result (morph/segment-word (model/surface-word word s) entry)]
     (update-in word [:surfaces s] assoc
                :segs (:segs result)
-               :morph-src (chars/escapes-as-written item)
+               :morph-src (chars/escapes-as-written entry)
                :morph-problems (morph/segment-problems result))))
 
-(defn- read-morph-rows
-  "Each surface's \\morph row (\\morph, \\morph[translit]), dividing its
+(defn- read-morph-tiers
+  "Each surface's \\morph tier (\\morph, \\morph[translit]), dividing its
   words into morphemes."
   [ctx words]
   (reduce (fn [[words ds] s]
-            (let [k (model/analysis-row "morph" s)]
+            (let [k (model/segmentation-tier "morph" s)]
               (cond
                 (not (value ctx k)) [words ds]
                 (not (value ctx s))
-                [words (into ds (at-source-line ctx k [{:level :error :msg (str "\\" k " segments the \\" s " row, but this line has none.")}]))]
+                [words (into ds (at-source-line ctx k [{:level :error :msg (str "\\" k " segments the \\" (tiers/command s) " tier, but this IGT has none.")}]))]
                 :else
-                ;; Items are split at spaces only: a \morph item has no braces.
-                (let [its (vec (remove #{"+"} (str/split (str/trim (value ctx k)) #"\s+")))
-                      [ws d] (assign-by-word words its #(segment-word %1 s %2) (str "\\" k))]
+                ;; Entries are split at spaces only: a \morph entry has no braces.
+                (let [es (vec (remove #{"+"} (str/split (str/trim (value ctx k)) #"\s+")))
+                      [ws d] (assign-by-word words es #(segment-word %1 s %2) (str "\\" k))]
                   [ws (into ds (at-source-line ctx k d))]))))
           [words []]
           model/surfaces))
 
-(defn- read-items
-  "The rows with an item per word that the word stores
-  (gloss.rows/word-items), each item read by gloss.model/read-item."
+(defn- read-entries
+  "The tiers with an entry per word that the word stores
+  (gloss.tiers/word-entries), each entry read by gloss.model/read-entry."
   [ctx words]
-  (reduce (fn [[words ds] row]
-            (if-not (value ctx row)
+  (reduce (fn [[words ds] tier]
+            (if-not (value ctx tier)
               [words ds]
-              (let [its (vec (items ctx row))
-                    [ws d] (assign-by-word words its #(model/put-fields %1 (first (model/read-item row %2)))
-                                           (str "\\" row))
-                    problems (for [item (take (count words) its)
-                                   p (second (model/read-item row item))]
+              (let [es (vec (entries (value ctx tier)))
+                    [ws d] (assign-by-word words es #(model/put-fields %1 (first (model/read-entry tier %2)))
+                                           (str "\\" (tiers/command tier)))
+                    problems (for [entry (take (count words) es)
+                                   p (second (model/read-entry tier entry))]
                                {:level :warning :msg p})]
-                [ws (into ds (at-source-line ctx row (concat d problems)))])))
+                [ws (into ds (at-source-line ctx tier (concat d problems)))])))
           [words []]
-          rows/word-items))
+          tiers/word-entries))
 
 (def ^:private word-steps
-  "The rows read word by word, in order: the transliteration before the
-  \\morph rows that divide it."
-  [read-translit read-morph-rows read-items])
+  "The tiers read word by word, in order: the transliteration before the
+  \\morph tiers that divide it."
+  [read-translit read-morph-tiers read-entries])
 
 (defn- read-syllables
-  "Each surface's \\syl row, with the one \\scan, placed on the surface's
-  letters. Returns {:prosody {surface p} :raw {row kept-as-written}
-  :diagnostics}."
-  [ctx line]
+  "Each surface's \\syl tier, with the one \\scan, placed on the surface's
+  letters. Returns {:prosody {surface p} :raw {tier kept-as-written}
+  :diagnostics}. Whether the two surfaces' syllables agree is checked on
+  the IGT afterwards (gloss.check), like their \\morph tiers."
+  [ctx igt]
   (let [scan (value ctx "scan")
         pros (into {} (for [s model/surfaces
-                            :let [k (model/analysis-row "syl" s)]
+                            :let [k (model/segmentation-tier "syl" s)]
                             :when (value ctx k)]
                         [s (if (value ctx s)
-                             (prosody/parse-prosody (model/surface-letters line s) (map :start (model/surface-ranges line s))
+                             (prosody/parse-prosody (model/surface-letters igt s) (map :start (model/surface-ranges igt s))
                                             scan (value ctx k) s)
-                             {:diagnostics [{:level :error :msg (str "\\" k " syllabifies the \\" s " row, but this line has none.")}]})]))
+                             {:diagnostics [{:level :error :msg (str "\\" k " syllabifies the \\" (tiers/command s) " tier, but this IGT has none.")}]})]))
         no-syl (when (and scan (empty? pros))
-                 (let [msg "\\scan needs a \\syl (or \\syl[translit]) row to say where the syllables are."]
+                 (let [msg "\\scan needs a \\syl (or \\syl[translit]) tier to say where the syllables are."]
                    {:raw {"scan" {:text scan :reason msg}}
-                    :diagnostics [{:level :error :msg msg}]}))
-        ;; Where both surfaces have syllables, they must be as many.
-        counts (into {} (for [[s p] pros :when (:prosody p)] [s (count (get-in p [:prosody :syllables]))]))
-        count-problem (when (> (count (distinct (vals counts))) 1)
-                        [{:level :error
-                          :msg (str (str/join " but " (for [[s n] counts] (str "\\" (model/analysis-row "syl" s) " has " n " syllables")))
-                                    ".")}])]
+                    :diagnostics [{:level :error :msg msg}]}))]
     {:prosody (into {} (for [[s p] pros :when (:prosody p)] [s (:prosody p)]))
      :raw (apply merge (concat (map :raw (vals pros)) [(:raw no-syl)]))
-     :diagnostics (concat (mapcat (fn [[s p]] (at-source-line ctx (model/analysis-row "syl" s) (:diagnostics p))) pros)
-                          (at-source-line ctx "scan" (concat (:diagnostics no-syl) count-problem)))}))
+     :diagnostics (concat (mapcat (fn [[s p]] (at-source-line ctx (model/segmentation-tier "syl" s) (:diagnostics p))) pros)
+                          (at-source-line ctx "scan" (:diagnostics no-syl)))}))
+
+(defn- repeated-fields
+  "The fields of a tier that an earlier field of the IGT already wrote
+  (only the first is read: see `block-context`). Notes can be repeated."
+  [fields]
+  (second
+   (reduce (fn [[seen out] f]
+             (let [k (tier-key f)]
+               [(conj seen k) (cond-> out (seen k) (conj f))]))
+           [#{} []]
+           (filter #(and (igt-commands (:command %)) (not= "note" (:command %))) fields))))
 
 (defn- field-problems
   "Problems with the fields themselves: a + outside \\text, options a
-  marker doesn't take, reserved characters, unknown markers."
+  command doesn't take, reserved characters, tiers written twice, unknown
+  commands."
   [ctx]
   (let [fields (:fields ctx)]
     (concat
      (for [f fields
-           :when (and (:marker f) (not (#{"text" "ft" "note"} (:marker f)))
+           :when (and (:command f) (not (#{"text" "ft" "note"} (tier-key f)))
                       (some #{"+"} (str/split (str/trim (field-value f)) #"\s+")))]
        {:level :warning :source-line (:source-line f)
-        :msg (str "Subline breaks (+) belong in \\text only; the + in \\" (row-key f) " is ignored.")})
+        :msg (str "Subline breaks (+) belong in \\text only; the + in \\" (tiers/command (tier-key f)) " is ignored.")})
      (option-problems fields)
      (for [f fields
-           :let [k (row-key f)]
+           :let [k (tier-key f)]
            :when (checked? k)
            d (char-problems k (cond-> (field-value f) (#{"ft" "note"} k) chars/hide-escapes))]
        (assoc d :source-line (:source-line f)))
      (for [f fields
-           :when (not (line-markers (:marker f)))
-           :when (not (unsupported (:marker f)))]
-       {:level :warning
+           :when (= "glmorph" (tier-key f))
+           d (gloss-start-problems (field-value f))]
+       (assoc d :source-line (:source-line f)))
+     ;; Like an unknown command's, a repeated field isn't kept: an error.
+     (for [f (repeated-fields fields)]
+       {:level :error :source-line (:source-line f)
+        :msg (str "This IGT already has \\" (tiers/command (tier-key f)) "; this one is dropped.")})
+     (for [f fields
+           :when (not (igt-commands (:command f)))
+           :when (not (unsupported (:command f)))]
+       ;; An unknown command's field isn't kept, so it is an error.
+       {:level (if (:command f) :error :warning)
         :source-line (:source-line f)
-        :msg (if (:marker f)
-               (str "Unknown marker \\" (:marker f) ".")
-               "Text outside any marker.")}))))
+        :msg (if (:command f)
+               (str "Unknown command \\" (:command f) ".")
+               "Text before any command.")}))))
 
 (defn parse-block
-  "Parses one line block (the fields from \\ex up to the next \\ex).
-  Returns {:line :diagnostics :source-lines}."
+  "Parses one IGT block (the fields from \\igt up to the next \\igt).
+  Returns {:igt :diagnostics :source-lines}."
   [fields]
-  (let [fields (map #(cond-> % (= "text" (:opt %)) (dissoc :opt)) fields)
-        ctx (block-context fields)
+  (let [ctx (block-context fields)
         text (value ctx "text")
-        {:keys [words breaks diagnostics]} (text/parse-row (or text ""))
+        {:keys [words breaks diagnostics]} (text/parse-tier (or text ""))
         text-problems (at-source-line ctx "text" (cond-> (vec diagnostics)
-                                           (nil? text) (conj {:level :error :msg "This line has no \\text row."})))
+                                           (nil? text) (conj {:level :error :msg "This IGT has no \\text tier."})))
         [words word-problems] (reduce (fn [[ws ds] step]
                                         (let [[ws d] (step ctx ws)] [ws (into ds d)]))
                                       [words []]
                                       word-steps)
-        ex (first (filter #(= "ex" (:marker %)) fields))
+        start (first (filter #(= "igt" (:command %)) fields))
         kept (keep-unsupported fields)
-        line (cond-> {:id (new-id)
-                      :label (when ex (not-empty (field-value ex)))
-                      :words words}
-               (seq breaks) (assoc :breaks breaks)
-               (seq (:kept kept)) (assoc :unsupported (:kept kept)))
+        igt (cond-> {:id (new-id)
+                     :label (when start (not-empty (field-value start)))
+                     :words words}
+              (seq breaks) (assoc :breaks breaks)
+              (seq (:kept kept)) (assoc :unsupported (:kept kept)))
         ;; Syllables are placed on the words' letters, so they come last.
-        {:keys [prosody raw] :as syllables} (read-syllables ctx line)
-        notes (mapv note-of (filter #(= "note" (:marker %)) fields))
-        line (cond-> line
-               (seq prosody) (assoc :prosody prosody)
-               (seq raw) (assoc :raw raw)
-               (value ctx "ft") (assoc :free (value ctx "ft"))
-               (seq notes) (assoc :notes notes))]
-    {:line line
+        {:keys [prosody raw] :as syllables} (read-syllables ctx igt)
+        notes (mapv note-of (filter #(= "note" (:command %)) fields))
+        igt (cond-> igt
+              (seq prosody) (assoc :prosody prosody)
+              (seq raw) (assoc :raw raw)
+              (value ctx "ft") (assoc :free (value ctx "ft"))
+              (seq notes) (assoc :notes notes))]
+    {:igt igt
      :source-lines (:source-lines ctx)
      :diagnostics (vec (concat text-problems word-problems (:diagnostics kept)
                                (:diagnostics syllables) (field-problems ctx)))}))
@@ -450,26 +524,27 @@
 ;; Documents
 
 (defn- split-blocks
-  "Splits fields into the header, line blocks and the back section. A block
-  starts at \\ex, or at a \\text when the current block already has one;
-  \\section starts a section, whose blocks carry its id; after \\end
-  comes the back section. Returns {:header :blocks [{:fields :section}]
-  :sections [{:id :label :title :source-line}] :back :end-line}."
+  "Splits fields into the header, IGT blocks and the back section. A block
+  starts at \\igt, or at a \\text when the current block already has one
+  (the text itself: \\text[translit] doesn't start a block); \\section
+  starts a section, whose blocks carry its id; after \\end comes the back
+  section. Returns {:header :blocks [{:fields :section}] :sections [{:id
+  :label :title :source-line}] :back :end-line}."
   [fields]
   (reduce (fn [{:keys [blocks section back?] :as acc} f]
             (let [cur (peek blocks)]
               (cond
                 back? (update acc :back conj f)
-                (= "end" (:marker f)) (assoc acc :back? true :end-line (:source-line f))
-                (= "section" (:marker f))
+                (= "end" (:command f)) (assoc acc :back? true :end-line (:source-line f))
+                (= "section" (:command f))
                 (let [id (new-id)]
                   (-> acc
                       (update :sections conj (cond-> {:id id :title (field-value f) :source-line (:source-line f)}
                                                (not (str/blank? (:opt f))) (assoc :label (:opt f))))
                       (assoc :section id)))
-                (or (= "ex" (:marker f))
-                    (and (= "text" (:marker f))
-                         (or (nil? cur) (some #(= "text" (:marker %)) (:fields cur)))))
+                (or (= "igt" (:command f))
+                    (and (= "text" (tier-key f))
+                         (or (nil? cur) (some #(= "text" (tier-key %)) (:fields cur)))))
                 (update acc :blocks conj (cond-> {:fields [f]} section (assoc :section section)))
                 (and (nil? cur) (nil? section)) (update acc :header conj f)
                 (nil? cur) (update acc :blocks conj (cond-> {:fields [f]} section (assoc :section section)))
@@ -480,197 +555,210 @@
 (defn- header-chars
   "Reserved characters and stray backslashes in a header field."
   [f]
-  (map #(assoc % :source-line (:source-line f)) (char-problems (:marker f) (chars/hide-escapes (field-value f)))))
+  (map #(assoc % :source-line (:source-line f)) (char-problems (:command f) (chars/hide-escapes (field-value f)))))
 
 (defn- parse-header
   "The header's fields read into the document's settings (title, \\abbr,
-  \\color, …). Returns {:doc :diagnostics}."
+  \\color, …). Returns {:doc :diagnostics :version}, :version being the
+  format version its \\glosshubformat gives (nil without one)."
   [fields]
   (reduce
    (fn [{:keys [doc] :as acc} f]
      (let [v (field-value f)]
-       (case (:marker f)
+       (case (:command f)
          "glosshubformat" (let [n (if (re-matches #"[1-9][0-9]*" v) (js/parseInt v 10) 0)]
                       (cond
                         (zero? n) (update acc :diagnostics conj
                                          {:level :error :source-line (:source-line f)
                                           :msg (str "\\glosshubformat takes the format version, a whole number "
                                                     "(\\glosshubformat " model/format-version "), not “" v "”.")})
-                        (> n model/format-version) (update acc :diagnostics conj
-                                                           {:level :warning :source-line (:source-line f)
-                                                            :msg (str "This text is written in version " n
-                                                                      " of the GlossHub format, and this site reads version "
-                                                                      model/format-version ". Parts of it may not show.")})
-                        :else acc))
+                        (> n model/format-version) (-> acc
+                                                       (assoc :version n)
+                                                       (update :diagnostics conj
+                                                               {:level :warning :source-line (:source-line f)
+                                                                :msg (str "This text is written in version " n
+                                                                          " of the GlossHub format, and this site reads versions up to "
+                                                                          model/format-version ". Parts of it may not show.")}))
+                        :else (assoc acc :version n)))
          "title" (-> acc (assoc-in [:doc :title] v) (update :diagnostics into (header-chars f)))
          "lang" (assoc-in acc [:doc :lang] v)
          "about" (-> acc (assoc-in [:doc :about] v) (update :diagnostics into (header-chars f)))
-         "order" (assoc-in acc [:doc :order] (mapv rows/row-name (str/split v #"\s+")))
+         "order" (assoc-in acc [:doc :order] (mapv tiers/row-key (str/split v #"\s+")))
          "dir" (if (#{"rtl" "ltr"} (str/lower-case v))
                  (assoc-in acc [:doc :dir] (str/lower-case v))
                  (update acc :diagnostics conj {:level :error :msg (str "\\dir must be rtl or ltr, not “" v "”.")}))
          "abbr" (if-let [[_ tag meaning] (re-matches #"(?s)(\S+)\s+(.+)" v)]
                   (assoc-in acc [:doc :abbrevs tag] meaning)
-                  (update acc :diagnostics conj {:level :error :msg (str "\\abbr needs a tag and a meaning: " v)}))
+                  (update acc :diagnostics conj {:level :error :msg (str "\\abbr needs an abbreviation and its meaning: " v)}))
          "color" (if-let [[_ tag color label] (re-matches #"(\S+)\s+(\S+)(?:\s+(.+))?" v)]
                    (update-in acc [:doc :colors] (fnil conj [])
                               (cond-> {:tag tag :color color} label (assoc :label label)))
-                   (update acc :diagnostics conj {:level :error :msg (str "\\color needs a tag and a color: " v)}))
+                   (update acc :diagnostics conj {:level :error :msg (str "\\color needs an abbreviation and a color: " v)}))
          "note" (-> acc
                     (update-in [:doc :notes] (fnil conj []) (note-of f))
                     (update :diagnostics conj
                             {:level :warning :source-line (:source-line f)
-                             :msg "Notes belong under a line or after \\end, not in the header; this one will be written after \\end."}))
-         (if (unsupported (:marker f))
+                             :msg "Notes belong under an IGT or after \\end, not in the header; this one will be written after \\end."}))
+         (if (unsupported (:command f))
            (let [{:keys [kept diagnostics]} (keep-unsupported [f])]
              (-> acc
                  (update-in [:doc :unsupported] (fnil into []) kept)
                  (update :diagnostics into diagnostics)))
          (update acc :diagnostics conj
-                 {:level :warning
+                 {:level (if (:command f) :error :warning)
                   :source-line (:source-line f)
-                  :msg (if (:marker f)
-                         (str "Unknown header marker \\" (:marker f) ".")
-                         "Text outside any marker.")})))))
+                  :msg (if (:command f)
+                         (str "Unknown header command \\" (:command f) ".")
+                         "Text before any command.")})))))
    {:doc {} :diagnostics []}
    fields))
 
 (defn- parse-blocks
-  "Parses line blocks in order, each in its section. Returns {:lines
-  :source-lines :diagnostics}, each diagnostic with its block's index and
-  line."
-  [blocks]
+  "Parses IGT blocks in order, each in its section, and checks that they
+  are written as format `version` writes them. Returns {:igts :source-lines
+  :diagnostics}, each diagnostic of an IGT with its id (:igt)."
+  [blocks version]
   (let [parsed (mapv (fn [{:keys [fields section]}]
                        (cond-> (parse-block fields)
-                         section (assoc-in [:line :section] section)))
+                         section (assoc-in [:igt :section] section)))
                      blocks)]
-    {:lines (mapv :line parsed)
-     :source-lines (into {} (map (juxt (comp :id :line) :source-lines) parsed))
-     :diagnostics (for [[i p] (map-indexed vector parsed)
-                        d (:diagnostics p)]
-                    (assoc d :block i :line (:id (:line p))))}))
+    {:igts (mapv :igt parsed)
+     :source-lines (into {} (map (juxt (comp :id :igt) :source-lines) parsed))
+     :diagnostics (concat (for [p parsed, d (:diagnostics p)]
+                            (assoc d :igt (:id (:igt p))))
+                          (version-1-problems (mapcat :fields blocks) version))}))
 
 (defn- parse-back
   "The back section, after \\end: notes only."
   [fields]
   (reduce (fn [acc f]
-            (if (= "note" (:marker f))
+            (if (= "note" (:command f))
               (update acc :notes conj (note-of f))
               (update acc :diagnostics conj
                       {:level :warning :source-line (:source-line f)
-                       :msg (if (:marker f)
-                              (str "Only notes may follow \\end; \\" (:marker f) " is ignored there.")
+                       :msg (if (:command f)
+                              (str "Only notes may follow \\end; \\" (:command f) " is ignored there.")
                               "Only notes may follow \\end; this text is ignored.")})))
           {:notes [] :diagnostics []}
           fields))
 
 (defn- section-problems
-  "Section labels unique in the text, line labels unique in their section."
-  [sections lines]
+  "Section labels unique in the text, IGT labels unique in their section."
+  [sections igts]
   (concat
    (for [[label ss] (group-by :label sections)
          :when (and label (> (count ss) 1))]
      {:level :error :source-line (:source-line (second ss))
       :msg (str "Two sections are labelled “" label "”; section labels must be unique.")})
-   (for [[_ ls] (group-by :section lines)
+   (for [[_ ls] (group-by :section igts)
          [label same] (group-by :label ls)
          :when (and label (> (count same) 1))]
-     {:level :error :line (:id (second same))
-      :msg (str "Two lines are labelled “" label "”" " in the same section; line labels must be unique there.")})))
+     {:level :error :igt (:id (second same))
+      :msg (str "Two IGTs are labelled “" label "”" " in the same section; IGT labels must be unique there.")})))
 
-(defn- parse-lines*
-  "`parse-lines`, with escapes still hidden."
+(defn- parse-igts*
+  "`parse-igts`, with escapes still hidden."
   [src]
   (let [{:keys [header blocks sections back end-line]} (split-blocks (field-lines src))
-        ;; Notes before the first block, or after \end, go under the first line.
-        loose (into (mapv note-of (filter #(= "note" (:marker %)) header))
+        ;; Notes before the first block, or after \end, go under the first IGT.
+        loose (into (mapv note-of (filter #(= "note" (:command %)) header))
                     (:notes (parse-back back)))
         stray (concat
-               (for [f header :when (not= "note" (:marker f))]
-                 {:level :warning :block 0 :source-line (:source-line f)
-                  :msg (str "Ignored " (if (:marker f) (str "\\" (:marker f)) "text")
-                            " before the first line.")})
+               (for [f header :when (not= "note" (:command f))]
+                 {:level :warning :source-line (:source-line f)
+                  :msg (str "Ignored " (if (:command f) (str "\\" (:command f)) "text")
+                            " before the first IGT.")})
                (for [s sections]
-                 {:level :warning :block 0 :source-line (:source-line s)
+                 {:level :warning :source-line (:source-line s)
                   :msg "Sections can't be added here; edit the document's source to add one."})
                (when end-line
-                 [{:level :warning :block 0 :source-line end-line
+                 [{:level :warning :source-line end-line
                    :msg "\\end can't be added here; edit the document's source."}]))
-        {:keys [lines source-lines diagnostics]} (parse-blocks (map #(dissoc % :section) blocks))]
-    {:lines (if (and (seq loose) (seq lines))
-              (update-in lines [0 :notes] (fnil into []) loose)
-              lines)
+        ;; An IGT's source editor holds IGTs the site wrote, so it is read as
+        ;; the version the site writes.
+        {:keys [igts source-lines diagnostics]} (parse-blocks (map #(dissoc % :section) blocks)
+                                                              model/format-version)]
+    {:igts (if (and (seq loose) (seq igts))
+             (update-in igts [0 :notes] (fnil into []) loose)
+             igts)
      :source-lines source-lines
      :diagnostics (vec (concat stray diagnostics))}))
 
 (defn- parse-document*
   "`parse-document`, with escapes still hidden."
-  [src]
+  [src version]
   (let [{:keys [header blocks sections back]} (split-blocks (field-lines src))
-        {:keys [doc diagnostics]} (parse-header header)
-        {:keys [lines source-lines] :as parsed} (parse-blocks blocks)
+        {:keys [doc diagnostics] :as head} (parse-header header)
+        {:keys [igts source-lines] :as parsed} (parse-blocks blocks (or (:version head) version 1))
         back (parse-back back)]
     {:doc (cond-> (-> {:title "Untitled" :abbrevs {} :colors [] :notes []}
                       (merge doc)
                       (update :notes (fnil into []) (:notes back))
-                      (assoc :lines lines))
+                      (assoc :igts igts))
             (seq sections) (assoc :sections (mapv #(dissoc % :source-line) sections)))
      :source-lines source-lines
      :diagnostics (vec (concat diagnostics
                                (:diagnostics parsed)
                                (:diagnostics back)
-                               (section-problems sections lines)))}))
+                               (section-problems sections igts)))}))
 
-(defn parse-lines
-  "Parses source containing only line blocks (as in the line editor).
-  Returns {:lines :source-lines :diagnostics}, each diagnostic with the
-  index of its block (:block). See `parse-document` for :source-lines."
+(defn parse-igts
+  "Parses source containing only IGT blocks (as in an IGT's source editor),
+  in the format version the site writes. Returns {:igts :source-lines
+  :diagnostics}. See `parse-document` for :source-lines."
   [src]
-  (chars/restore-escapes (parse-lines* src)))
+  (chars/restore-escapes (parse-igts* src)))
 
 (defn parse-document
   "Parses a whole text. Returns {:doc :source-lines :diagnostics}: the
-  document, where each line's rows are in the source ({line-id {row-key
+  document, where each IGT's tiers are in the source ({igt-id {tier-key
   source-line}}, for problems found later, see gloss.check), and the
-  problems found while reading."
-  [src]
-  (chars/restore-escapes (parse-document* src)))
+  problems found while reading. A text without \\glosshubformat is of
+  format `version`, by default 1 (docs/format.md §2); the site's own
+  sources, such as the Guide's examples, are of the version it writes."
+  [src & [version]]
+  (chars/restore-escapes (parse-document* src version)))
 
 ;; ---------------------------------------------------------------------------
-;; Filling rows from the text
+;; Filling tiers from the text
 
 (defn fillable
-  "The rows that can be filled in from the words of the surface they
-  analyse, for source `src`: \\morph and \\syl, and their [translit]
-  versions when a line has a \\translit."
+  "The tiers that can be filled in from the words of the surface they
+  divide, for source `src`: \\morph and \\syl, and their [translit]
+  versions when an IGT has a \\text[translit]."
   [src]
-  (let [translit? (some #(= "translit" (:marker %)) (field-lines src))]
+  (let [translit? (some #(= "translit" (tier-key %)) (field-lines src))]
     (for [s model/surfaces
           :when (or (= s "text") translit?)
-          row ["morph" "syl"]]
-      (model/analysis-row row s))))
+          tier ["morph" "syl"]]
+      (model/segmentation-tier tier s))))
 
-(defn fill-row
-  "Adds the row `row-key` (see `fillable`) to every line of `src` that has
-  the row it comes from but not this one: each word's letters, without
-  punctuation, ready for morpheme or syllable breaks. The rest of the
-  source is kept as written."
+(defn fill-tier
+  "Adds the tier `k` (see `fillable`) to every IGT of `src` that has the
+  tier it comes from but not this one: each word's letters, without
+  punctuation, ready for morpheme or syllable breaks, indented under that
+  tier as the site writes it, a \\syl after the tier's \\morph. The rest of
+  the source is kept as written."
   [src k]
-  (let [marker (str "\\" k)
+  (let [command (str "\\" k)
         from (if (str/ends-with? k "[translit]") "translit" "text")
         lines (str/split-lines (normalize src))
         {:keys [blocks]} (split-blocks (field-lines src))
         inserts (into {}
                       (for [{:keys [fields]} blocks
-                            :let [fields (map #(cond-> % (= "text" (:opt %)) (dissoc :opt)) fields)
-                                  src-field (first (filter #(= from (row-key %)) fields))]
-                            :when (and src-field (not (some #(= k (row-key %)) fields)))
-                            :let [line (:line (parse-block fields))
+                            :let [src-field (first (filter #(= from (tier-key %)) fields))]
+                            :when (and src-field (not (some #(= k (tier-key %)) fields)))
+                            :let [igt (:igt (parse-block fields))
                                   word-of #(model/surface-word % from)
-                                  items (for [w (:words line)
-                                              :let [core (chars/restore-escapes (word-of w))]]
-                                          (apply str (for [c (chars/letters-of core)] (subs core (:start c) (:end c)))))]]
-                        ;; After the source row and its continuation lines.
-                        [(+ (dec (:source-line src-field)) (count (:cont src-field)))
-                         (str marker " " (str/join " " items))]))]
+                                  entries (for [w (:words igt)
+                                                :let [core (chars/restore-escapes (word-of w))]]
+                                            (apply str (for [c (chars/letters-of core)] (subs core (:start c) (:end c)))))
+                                  next-field (second (drop-while #(not= src-field %) fields))
+                                  after (if (and (str/starts-with? k "syl") next-field
+                                                 (= (model/segmentation-tier "morph" from) (tier-key next-field)))
+                                          next-field
+                                          src-field)]]
+                        ;; After that tier and its continuation lines.
+                        [(+ (dec (:source-line after)) (count (:cont after)))
+                         (str tiers/segmentation-indent command " " (str/join " " entries))]))]
     (str/join "\n" (apply concat (map-indexed (fn [i l] (if-let [ins (inserts i)] [l ins] [l])) lines)))))

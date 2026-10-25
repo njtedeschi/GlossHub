@@ -5,6 +5,8 @@
   :dev {:main-opts ["-m" "cljs.main" "-co" "dev.edn" "-w" "src" "-c"]}
   ;; One optimized file, public/js/main.js.
   :release {:main-opts ["-m" "cljs.main" "-co" "release.edn" "-c"]}
+  ;; Compile the file checker; run it with `node target/check/check.js FILE…`.
+  :check {:main-opts ["-m" "cljs.main" "-co" "check.edn" "-c"]}
   ;; Compile the tests; run them with `node target/test/test.js`.
   :test {:extra-paths ["test"]
          :main-opts ["-m" "cljs.main" "-co" "test.edn" "-c"]}}}

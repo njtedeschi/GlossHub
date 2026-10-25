@@ -4,12 +4,14 @@
   "description": "Development commands, browser tests and the site's assembly script for GlossHub. The site itself has no npm dependencies.",
   "scripts": {
     "dev": "clojure -M:dev",
-    "build": "clojure -M:release",
+    "build": "node -e \"require('fs').rmSync('target/release',{recursive:true,force:true})\" && clojure -M:release",
     "build:site": "node scripts/build-site.cjs",
     "serve": "python3 -m http.server -d public 8000",
-    "test": "npm run test:unit && npm run build && npm run test:browser",
-    "test:unit": "clojure -M:test && node target/test/test.js",
-    "test:browser": "node --test --test-concurrency=1 \"test/browser/*.test.cjs\""
+    "test": "npm run test:unit && npm run test:check && npm run build && npm run test:browser",
+    "test:unit": "node -e \"require('fs').rmSync('target/test',{recursive:true,force:true})\" && clojure -M:test && node target/test/test.js",
+    "test:check": "clojure -M:check && node target/check/check.js texts test/fixtures && node target/check/check.js --round-trip texts test/fixtures",
+    "test:browser": "node --test --test-concurrency=1 \"test/browser/*.test.cjs\"",
+    "check": "clojure -M:check && node target/check/check.js"
   },
   "devDependencies": {
     "playwright": "1.56.1"

@@ -1,5 +1,5 @@
 (ns gloss.morph
-  "Morphemes: reading a \\morph item and placing its breaks on the word as
+  "Morphemes: reading a \\morph entry and placing its breaks on the word as
   written, and pairing the gloss morphemes of \\glmorph with the morphemes
   they gloss (docs/format.md §5.3 and §5.6)."
   (:require [clojure.string :as str]
@@ -7,12 +7,12 @@
             [gloss.vocab :as vocab]))
 
 ;; ---------------------------------------------------------------------------
-;; Morpheme rows (\morph, \morph[translit])
+;; Morpheme tiers (\morph, \morph[translit])
 ;;
-;; A \morph item segments one word: `-` `=` `~` between morphemes, `<…>`
+;; A \morph entry segments one word: `-` `=` `~` between morphemes, `<…>`
 ;; around an infix, `\0` (or Ø) for a zero morpheme, `[…]` around a stem
 ;; (whole morphemes), `(…)` around root letters (within a morpheme; several
-;; groups in one morpheme form one root). The item is matched letter by
+;; groups in one morpheme form one root). The entry is matched letter by
 ;; letter against its word, and its boundaries are placed on the word as
 ;; written.
 ;;
@@ -26,23 +26,23 @@
   #{"-" "=" "~"})
 
 (def ^:private morph-free
-  "Punctuation that a \\morph item may contain and that is ignored, so text
+  "Punctuation that a \\morph entry may contain and that is ignored, so text
   can be pasted in and broken up."
   (set ".,;:!?\""))
 
 (defn- morph-tokens
-  "The tokens of a \\morph item: [:sep c] for a separator, [:infix-open]
+  "The tokens of a \\morph entry: [:sep c] for a separator, [:infix-open]
   and [:infix-close] for < >, [:stem-open] and [:stem-close] for [ ],
   [:root-open] and [:root-close] for ( ), [:zero] for \\0 (or Ø, ∅),
   [:command name] for any other backslash (name \"\" when no letters or
   digits follow it), and [:char c] for anything else."
-  [item]
+  [entry]
   (loop [i 0, out []]
-    (if (>= i (count item))
+    (if (>= i (count entry))
       out
-      (let [c (subs item i (inc i))]
+      (let [c (subs entry i (inc i))]
         (if (= c "\\")
-          (let [cmd (or (re-find #"^[0-9A-Za-z]+" (subs item (inc i))) "")]
+          (let [cmd (or (re-find #"^[0-9A-Za-z]+" (subs entry (inc i))) "")]
             (recur (+ i 1 (count cmd)) (conj out (if (= cmd "0") [:zero] [:command cmd]))))
           (recur (inc i) (conj out (case c
                                      ("-" "=" "~") [:sep c]
@@ -55,7 +55,7 @@
                                      ("Ø" "∅") [:zero]
                                      [:char c]))))))))
 
-;; An item is read token by token, into a state: the segments read so far
+;; An entry is read token by token, into a state: the segments read so far
 ;; (:segs), the one being read (:cur, with its :root ranges and, while a
 ;; root is open, where it started, :root-open), how many stems are open
 ;; (:depth), and the problems found. A root open when an infix starts
@@ -77,7 +77,7 @@
   (and (= "" (get-in st [:cur :text])) (not (get-in st [:cur :zero?]))))
 
 (defn- close-seg
-  "Ends the current segment; `end?` when the item ends there."
+  "Ends the current segment; `end?` when the entry ends there."
   [st end?]
   (let [st (cond-> st
              (get-in st [:cur :root-open])
@@ -161,12 +161,12 @@
                                "A backslash must be escaped: write \\\\."))
     :char (add-char st x)))
 
-(defn parse-morph-item
-  "Reads one \\morph item (escapes hidden). Returns {:segs [{:text :sep
+(defn parse-morph-entry
+  "Reads one \\morph entry (escapes hidden). Returns {:segs [{:text :sep
   :zero? :stem? :root [[a b]] :infix? :cont?}] :problems [msg]}, where
   :root ranges count the segment's letters."
-  [item]
-  (let [tokens (morph-tokens item)
+  [entry]
+  (let [tokens (morph-tokens entry)
         st (reduce (fn [st [token next-token]] (morph-step st token next-token))
                    {:segs [] :cur (new-seg nil) :depth 0 :problems []}
                    (map vector tokens (concat (rest tokens) [nil])))
@@ -188,7 +188,7 @@
   #{"-" "‐" "‑"})
 
 (defn project-morph
-  "Places a \\morph item's segments (from `parse-morph-item`) on `core`,
+  "Places a \\morph entry's segments (from `parse-morph-entry`) on `core`,
   the word as written. The letters must match (docs/format.md §4.1).
   Returns {:segs [{:text :sep :joint :zero? :stem? :root}]} where each
   segment's :text is a stretch of `core` and :joint is a hyphen of `core`
@@ -253,7 +253,7 @@
                         (seq root) (assoc :root root))))}))))
 
 (defn whole-word
-  "The segments of a word with no \\morph item: one, the whole word."
+  "The segments of a word with no \\morph entry: one, the whole word."
   [core]
   (if (= core "") [] [{:text core}]))
 
@@ -263,20 +263,20 @@
   (apply str (map #(str (:joint %) (:text %)) segs)))
 
 (defn segment-word
-  "Segments for a word as written (`core`) from its \\morph item (or nil).
+  "Segments for a word as written (`core`) from its \\morph entry (or nil).
   Returns {:segs :problems :mismatch}: unsegmented, with the :mismatch,
-  when the item doesn't spell the word."
-  [core item]
-  (if (str/blank? item)
+  when the entry doesn't spell the word."
+  [core entry]
+  (if (str/blank? entry)
     {:segs (whole-word core) :problems []}
-    (let [{:keys [segs problems]} (parse-morph-item item)
+    (let [{:keys [segs problems]} (parse-morph-entry entry)
           projected (project-morph core segs)]
       (if (:problem projected)
         {:segs (whole-word core) :problems problems :mismatch (:problem projected)}
         {:segs (:segs projected) :problems problems}))))
 
 (defn segment-problems
-  "Problems from segmenting a word, as diagnostics: a \\morph item that
+  "Problems from segmenting a word, as diagnostics: a \\morph entry that
   doesn't spell its word is an error, the rest are warnings."
   [{:keys [problems mismatch]}]
   (vec (concat (for [p problems] {:level :warning :msg (chars/restore-escapes p)})
@@ -285,27 +285,27 @@
 ;; ---------------------------------------------------------------------------
 ;; Morphemes and their glosses
 ;;
-;; A \glmorph item is split into gloss morphemes the way a \morph item is
+;; A \glmorph entry is split into gloss morphemes the way a \morph entry is
 ;; split into segments, and each gloss morpheme is paired with a morpheme:
 ;; infix glosses (<…>) with the infixes in order, the others with the other
 ;; morphemes in order.
 
 (defn split-gloss
-  "The gloss morphemes of a \\glmorph item, split at the Leipzig
+  "The gloss morphemes of a \\glmorph entry, split at the Leipzig
   separators, each with the separator before it: \"rīdet=ne\" ->
   [{:text \"rīdet\"} {:text \"ne\" :sep \"=\"}]. `<…>` is an infix's gloss,
   {:text :infix? true}, wherever it stands (`<AV>write`); a lone < or > is
   part of the gloss (1>3)."
-  [item]
-  (let [n (count item)
+  [entry]
+  (let [n (count entry)
         seg (fn [cur sep] (cond-> {:text cur} sep (assoc :sep sep)))]
     (loop [i 0, cur "", sep nil, out []]
       (if (>= i n)
         (if (or (not= cur "") sep (empty? out) (not (:infix? (peek out))))
           (conj out (seg cur sep))
           out)
-        (let [c (subs item i (inc i))
-              infix (when (= c "<") (re-find #"^<([^<>\s=~-]+)>" (subs item i)))]
+        (let [c (subs entry i (inc i))
+              infix (when (= c "<") (re-find #"^<([^<>\s=~-]+)>" (subs entry i)))]
           (cond
             infix
             (recur (+ i (count (first infix))) "" nil
@@ -379,7 +379,7 @@
 
 (defn join-segments
   "Segments (or gloss morphemes) written out with their separators, an
-  infix in angle brackets; with `markup`, escaped for a row whose markup
+  infix in angle brackets; with `markup`, escaped for a tier whose markup
   it is (gloss.chars/escape)."
   ([segments] (apply str (map (fn [{:keys [text sep infix?]}] (if infix? (str "<" text ">") (str sep text))) segments)))
   ([markup segments] (join-segments (map #(update % :text (partial chars/escape markup)) segments))))
