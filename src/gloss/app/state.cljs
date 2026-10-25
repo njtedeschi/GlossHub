@@ -2,6 +2,7 @@
   "The application state: the reader's defaults and preferences, the site's
   published texts and routes, the open text, and undo/redo."
   (:require [clojure.string :as str]
+            [gloss.app.markdown-pages :as md-pages]
             [gloss.app.samples :as samples]
             [gloss.parse :as parse]))
 
@@ -9,20 +10,21 @@
 ;; State
 
 (def default-view
-  "The reader's display settings. Each row has a switch (`…-row`) that hides
-  the whole row without touching the settings inside it."
-  {:scansion-row true
+  "The reader's display settings. Each group of settings has a switch
+  (`…-group`) that hides the whole group without touching the settings
+  inside it."
+  {:scansion-group true
    :marks true
    :syllables false
-   :orthography-row true
-   :glossing-row true
-   :marking-row true
+   :orthography-group true
+   :glossing-group true
+   :marking-group true
    :ruby true
    :translit true
    :phonemic true
    :phonetic true
    :ipa true
-   :gloss :full                         ; :full | :tags | :none
+   :gloss :full                         ; :full | :grammatical | :none
    :pos :none                           ; :full | :class | :none
    :wgloss true
    :morph-breaks true
@@ -30,16 +32,16 @@
    :roots :double                       ; :double | :bold | :none
    :text-fmt true                       ; formatting from \\text, in every row it reaches
    :color true
-   :commentary-row true
+   :commentary-group true
    :free :below                         ; :below | :side | :none
    :notes :below
-   :layer-orders {}                     ; the reader's own layer order, per text
+   :row-orders {}                       ; the reader's own row order, per text
    :display-open? true})                ; Display options expanded
 
 (def ^:private global-only
-  "View keys that are never per text: the layer orders are per text already,
+  "View keys that are never per text: the row orders are per text already,
   and whether Display options is open is the reader's habit, not the text's."
-  #{:layer-orders :display-open?})
+  #{:row-orders :display-open?})
 
 (defn- same-kind?
   "Whether saved value `v` is of the same kind as default `d` (both
@@ -169,10 +171,12 @@
   #<slug> a published text, any other #<id> one of the reader's own texts
   (checked when rendering)."
   [hash]
-  (let [h (str/replace (str hash) #"^#/?" "")]
+  (let [h (str/replace (str hash) #"^#/?" "")
+        guide-page (md-pages/by-address h)]
     (cond
       (#{"" "edit"} h) {:page :published}
       (= h "texts") {:page :published}
+      guide-page {:page :guide :guide-page (:slug guide-page)}
       (some #(= h (first %)) (concat sections text-tabs)) {:page (keyword h)}
       (text-by-slug h) {:page :text :slug h}
       :else {:page :own :id h})))
@@ -183,7 +187,7 @@
   (set! (.-hash js/location) hash))
 
 (defonce ^{:doc "The application state, one map: see docs/architecture.md
-  (section 6.1) for its keys."}
+  (section 5.1) for its keys."}
   state
   (atom nil))
 
@@ -202,11 +206,11 @@
 
 (defn page-view
   "The display settings for the open text: the reader's defaults, with the
-  changes made on this text's page, and the reader's layer order for it."
+  changes made on this text's page, and the reader's row order for it."
   [s]
   (-> (default-display s)
       (merge (get-in s [:text-views (doc-key s)]))
-      (assoc :reader-order (get-in s [:view :layer-orders (doc-key s)]))))
+      (assoc :reader-order (get-in s [:view :row-orders (doc-key s)]))))
 
 (defn set-display
   "Changes display option `k` with `f`. On a text page the change is that
@@ -224,11 +228,11 @@
           (update s :text-views dissoc dk))))))
 
 (defn page-view-changed?
-  "Whether the open text has display changes of its own (or its own layer
+  "Whether the open text has display changes of its own (or its own row
   order) for Reset to undo."
   [s]
   (let [dk (doc-key s)]
-    (boolean (or (seq (get-in s [:text-views dk])) (seq (get-in s [:view :layer-orders dk]))))))
+    (boolean (or (seq (get-in s [:text-views dk])) (seq (get-in s [:view :row-orders dk]))))))
 
 (defn- doc-path
   "Where the open page's document is stored: the reader's own text, or their

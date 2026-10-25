@@ -10,12 +10,11 @@
             [gloss.serialize :as ser]))
 
 (defn- doc [src] (:doc (parse/parse-document src)))
-(defn- words [src] (get-in (doc src) [:lines 0 :words]))
+(defn- words [src] (get-in (doc src) [:igts 0 :words]))
 (defn- msgs [src] (map :msg (:diagnostics (parse/parse-document src))))
 (defn- round-trips? [src]
-  (let [d (doc src)
-        strip #(update % :lines (fn [ls] (mapv (fn [l] (dissoc l :id)) ls)))]
-    (= (strip d) (strip (doc (ser/document-source d))))))
+  (let [d (doc src)]
+    (= (model/without-ids d) (model/without-ids (doc (ser/document-source d))))))
 
 (deftest styles-in-text
   (testing "each style, and styles together"
@@ -65,8 +64,8 @@
   (is (some #(re-find #"isn't closed in it" %) (msgs "\\text a\n\\glword **x")))
   (testing "editing a cell"
     (let [d (doc "\\text a\n\\glword x")
-          id (get-in d [:lines 0 :id])
-          w (get-in (edit/set-item d id 0 "glword" "*o* boy") [:lines 0 :words 0])]
+          id (get-in d [:igts 0 :id])
+          w (get-in (edit/set-entry d id 0 "glword" "*o* boy") [:igts 0 :words 0])]
       (is (= "o boy" (:glword w)))
       (is (= [{:start 0 :end 1 :styles #{:italic}}] (:glword-fmt w))))))
 

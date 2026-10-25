@@ -1,6 +1,7 @@
 (ns gloss.app-test
   (:require [cljs.reader :as reader]
             [cljs.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [gloss.app.actions :as actions]
             [gloss.app.state :as state]
             [gloss.app.storage :as storage]
@@ -23,45 +24,64 @@
     (is (= {:page :text :slug "hebrew"} (state/route-of "#/hebrew"))))
   (is (= {:page :own :id "d1234abcd"} (state/route-of "#d1234abcd"))))
 
-(deftest reader-layer-order-is-a-display-setting
+(deftest reader-row-order-is-a-display-setting
   (with-redefs [state/library fx/library]
-  (let [s {:route {:page :text :slug "hebrew"} :overrides {} :docs {} :view {:layer-orders {}}}
-        s2 (actions/handle s nil [:layers/move ["translit" -1]])]
+  (let [s {:route {:page :text :slug "hebrew"} :overrides {} :docs {} :view {:row-orders {}}}
+        s2 (actions/handle s nil [:row-order/move ["translit" -1]])]
     (is (empty? (:overrides s2)))
-    (is (= "translit" (first (get-in s2 [:view :layer-orders "hebrew"]))))
-    (let [s3 (actions/handle s2 nil [:layers/save-doc])]
+    (is (= "translit" (first (get-in s2 [:view :row-orders "hebrew"]))))
+    (let [s3 (actions/handle s2 nil [:row-order/save-doc])]
       (is (= "translit" (first (:order (get-in s3 [:overrides "hebrew"])))))
-      (is (nil? (get-in s3 [:view :layer-orders "hebrew"])))))))
+      (is (nil? (get-in s3 [:view :row-orders "hebrew"])))))))
 
 (deftest editing-a-published-text-starts-a-local-version
   (with-redefs [state/library fx/library]
   (let [s {:route {:page :text :slug "latin"} :overrides {} :docs {}}
         published (state/current-doc s)
-        target {:line (get-in published [:lines 0 :id]) :row "glword" :word 0}
+        target {:igt (get-in published [:igts 0 :id]) :row "glword" :word 0}
         s2 (-> s
                (actions/handle nil [:edit/start target])
                (actions/handle nil [:edit/commit]))]
     (is (= "Latin sentences" (:title published)))
     (is (contains? (:overrides s2) "latin"))
-    (is (= (:lines published) (:lines (state/current-doc s2))))
+    (is (= (:igts published) (:igts (state/current-doc s2))))
     (is (= "Latin sentences" (get-in @state/library [0 :doc :title]))))))
+
+(deftest applying-an-unchanged-source-is-no-edit
+  (with-redefs [state/library fx/library]
+    (let [s {:route {:page :text :slug "latin"} :overrides {} :docs {}}
+          id (get-in (state/current-doc s) [:igts 0 :id])
+          draft (fn [s f] (actions/handle s #js {:target #js {:value (f (get-in s [:ui :doc-source]))}} [:doc-source/draft]))]
+      (testing "the whole text, or one IGT, applied as it was: no edited version, nothing to undo"
+        (doseq [s2 [(-> s (actions/handle nil [:doc/source]) (actions/handle nil [:doc-source/apply]))
+                    (-> s (actions/handle nil [:igt/source id]) (actions/handle nil [:source/apply]))]]
+          (is (empty? (:overrides s2)))
+          (is (empty? (:history s2)))
+          (is (= {} (:ui s2)))))
+      (testing "a change is an edit"
+        (let [s2 (-> s
+                     (actions/handle nil [:doc/source])
+                     (draft #(str/replace % "\\title Latin sentences" "\\title Renamed"))
+                     (actions/handle nil [:doc-source/apply]))]
+          (is (= "Renamed" (:title (state/current-doc s2))))
+          (is (contains? (:overrides s2) "latin")))))))
 
 (deftest bundled-texts-parse-cleanly
   (testing "the published texts"
     (doseq [{:keys [slug source]} samples/published
-            :let [{:keys [doc diagnostics]} (parse/parse-document source)]]
-      (is (seq (:lines doc)) slug)
-      (is (empty? (concat diagnostics (check/check-doc doc))) slug)
+            :let [{:keys [doc] :as parsed} (parse/parse-document source)]]
+      (is (seq (:igts doc)) slug)
+      (is (empty? (check/problems parsed)) slug)
       (is (not (clojure.string/blank? (:about doc))) slug)))
   (testing "the template for a new text"
-    (let [{:keys [doc diagnostics]} (parse/parse-document samples/blank)]
+    (let [{:keys [doc] :as parsed} (parse/parse-document samples/blank)]
       (is (= "Untitled" (:title doc)))
-      (is (empty? (:lines doc)))
-      (is (empty? (concat diagnostics (check/check-doc doc)))))))
+      (is (empty? (:igts doc)))
+      (is (empty? (check/problems parsed))))))
 
 (defn- edit-glword [s text]
-  (let [line-id (get-in (state/current-doc s) [:lines 0 :id])
-        target {:line line-id :row "glword" :word 0}]
+  (let [igt-id (get-in (state/current-doc s) [:igts 0 :id])
+        target {:igt igt-id :row "glword" :word 0}]
     (-> s
         (actions/handle nil [:edit/start target])
         (assoc-in [:ui :draft] text)
@@ -70,7 +90,7 @@
 (deftest undo-and-redo
   (with-redefs [state/library fx/library]
   (let [s0 {:route {:page :text :slug "latin"} :overrides {} :docs {} :view {}}
-        wg #(get-in (state/current-doc %) [:lines 0 :words 0 :glword])
+        wg #(get-in (state/current-doc %) [:igts 0 :words 0 :glword])
         s1 (edit-glword s0 "A")
         s2 (edit-glword s1 "B")]
     (is (= ["the sailor" "A" "B"] (map wg [s0 s1 s2])))
@@ -94,25 +114,43 @@
            :overrides {"latin" (:doc (parse/parse-document fx/latin))}
            :order ["d1"] :view {}}
         saved (storage/saved-form s)
-        back (storage/migrate (reader/read-string (pr-str saved)))
-        ;; Generated ids differ after a reload; sections are compared by label.
-        strip (fn [doc]
-                (let [label (into {} (map (juxt :id :label) (:sections doc)))]
-                  (cond-> (update doc :lines (fn [ls] (mapv #(cond-> (dissoc % :id) (:section %) (update :section label)) ls)))
-                    (:sections doc) (update :sections (fn [ss] (mapv #(dissoc % :id) ss))))))]
-    (is (= 1 (:format saved)))
+        back (storage/migrate (reader/read-string (pr-str saved)))]
+    (is (= 2 (:format saved)))
     (is (string? (get-in saved [:docs "d1"])))
-    (is (= (strip (get-in s [:docs "d1"])) (strip (get-in back [:docs "d1"]))))
-    (is (= (strip (get-in s [:overrides "latin"])) (strip (get-in back [:overrides "latin"]))))))
+    ;; Generated ids differ after a reload; sections are compared by label.
+    (is (= (model/without-ids (get-in s [:docs "d1"])) (model/without-ids (get-in back [:docs "d1"]))))
+    (is (= (model/without-ids (get-in s [:overrides "latin"])) (model/without-ids (get-in back [:overrides "latin"]))))))
+
+(deftest display-settings-saved-in-format-1-carry-over
+  ;; As the first public version saved them: the groups' switches named as
+  ;; rows, the reader's row orders as layer orders, and "tags only" glosses.
+  (let [saved {:format 1 :docs {} :overrides {}
+               :view {:glossing-row false :scansion-row false :marks false
+                      :layer-orders {"aeneid" ["glmorph" "text"]} :gloss :tags}
+               :text-views {"aeneid" {:marking-row false :gloss :tags}}}
+        back (storage/migrate (reader/read-string (pr-str saved)))
+        view (state/clean-view (:view back))]
+    (is (= 2 (:format back)))
+    (is (false? (:glossing-group view)))
+    (is (false? (:scansion-group view)))
+    (is (false? (:marks view)))
+    (is (true? (:commentary-group view)) "a switch that wasn't saved keeps its default")
+    (is (= {"aeneid" ["glmorph" "text"]} (:row-orders view)))
+    (is (= :grammatical (:gloss view)))
+    (is (= {"aeneid" {:marking-group false :gloss :grammatical}}
+           (state/clean-text-views (:text-views back)))))
+  (testing "settings saved in format 2 are read as they are"
+    (is (= {:glossing-group false :gloss :none}
+           (:view (storage/migrate {:format 2 :view {:glossing-group false :gloss :none}}))))))
 
 (deftest problems-point-at-source-lines
   (let [{:keys [diagnostics]} (parse/parse-document "\\title T\n\n\\ex\n\\tx a b\n% comment\n\\gl x\n\\wg p q r\n\\scan _ u\n\\syl ab")
         lines-by-msg (into {} (map (juxt :msg :source-line) diagnostics))]
     (is (= #{6 7 9} (set (vals lines-by-msg)))))
-  (let [{:keys [lines source-lines]} (parse/parse-lines "\\ex\n\\tx a\n\\gl XYZ")
-        d (first (check/check-line {} (first lines)))]
+  (let [{:keys [igts source-lines]} (parse/parse-igts "\\ex\n\\tx a\n\\gl XYZ")
+        d (first (check/check-igt {} (first igts)))]
     (is (= "glmorph" (:field d)))
-    (is (= 3 (get-in source-lines [(:line d) "glmorph"])))))
+    (is (= 3 (get-in source-lines [(:igt d) "glmorph"])))))
 
 (deftest preferences
   (testing "unknown or malformed saved values fall back to the defaults"
@@ -135,7 +173,7 @@
   (let [on (fn [s slug] (assoc s :route {:page :text :slug slug}))
         s {:route {:page :text :slug "latin"} :text-views {}
            :view (assoc state/default-view :display-open? false
-                        :layer-orders {"latin" ["glmorph" "text"] "hebrew" ["translit" "text"]})}
+                        :row-orders {"latin" ["glmorph" "text"] "hebrew" ["translit" "text"]})}
         e (fn [v] #js {:target #js {:value v}})
         s1 (-> s
                (actions/handle (e "full") [:view/select :pos])
@@ -144,16 +182,16 @@
       (is (= {"latin" {:pos :full :wgloss false}} (:text-views s1)))
       (is (= :full (:pos (state/page-view s1))))
       (is (= :none (:pos (state/page-view (on s1 "hebrew")))))
-      (is (= state/default-view (assoc (:view s1) :display-open? true :layer-orders {}))))
+      (is (= state/default-view (assoc (:view s1) :display-open? true :row-orders {}))))
     (testing "setting an option back to the default drops it"
       (is (= {"latin" {:pos :full}} (:text-views (actions/handle s1 nil [:view/toggle :wgloss])))))
     (testing "opening and closing the box stays global"
       (is (true? (get-in (actions/handle s1 nil [:view/toggle :display-open?]) [:view :display-open?]))))
-    (testing "reset returns this text to the defaults and its own layer order"
+    (testing "reset returns this text to the defaults and its own row order"
       (let [r (actions/handle s1 nil [:view/reset-page])]
         (is (not (state/page-view-changed? r)))
         (is (empty? (:text-views r)))
-        (is (= {"hebrew" ["translit" "text"]} (get-in r [:view :layer-orders])))
+        (is (= {"hebrew" ["translit" "text"]} (get-in r [:view :row-orders])))
         (is (state/page-view-changed? (on r "hebrew")))))
     (testing "the Settings reset clears every text's changes"
       (is (empty? (:text-views (actions/handle s1 nil [:settings/reset-view])))))
@@ -184,12 +222,12 @@
   (with-redefs [state/library fx/library]
   (let [s {:route {:page :text :slug "hebrew"} :overrides {} :docs {}}
         published (state/current-doc s)
-        target {:line (get-in published [:lines 0 :id]) :row "translit" :word 3}
+        target {:igt (get-in published [:igts 0 :id]) :row "translit" :word 3}
         started (actions/handle s nil [:edit/start target])
         s2 (actions/handle started nil [:edit/commit])]
     (is (= "beveto" (get-in started [:ui :draft])))
-    (is (= (model/segs (get-in published [:lines 0 :words 3]) "translit")
-           (model/segs (get-in (state/current-doc s2) [:lines 0 :words 3]) "translit"))))))
+    (is (= (model/segs (get-in published [:igts 0 :words 3]) "translit")
+           (model/segs (get-in (state/current-doc s2) [:igts 0 :words 3]) "translit"))))))
 
 (deftest exporting-everything
   (with-redefs [state/library fx/library]
@@ -218,7 +256,7 @@
 (deftest a-published-text-changing-under-an-edit
   (let [s (with-redefs [state/library fx/library]
             (-> {:route {:page :text :slug "latin"} :overrides {} :docs {}}
-                (state/update-doc edit/set-free (get-in @fx/library [0 :doc :lines 0 :id]) "Changed.")))
+                (state/update-doc edit/set-free (get-in @fx/library [0 :doc :igts 0 :id]) "Changed.")))
         changed (delay (update-in @fx/library [0 :source] str "\n\\ex\n\\text novum"))]
     (testing "the first edit remembers the published version it started from"
       (with-redefs [state/library fx/library]

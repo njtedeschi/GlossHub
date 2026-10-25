@@ -12,10 +12,10 @@ describe('editing', () => {
   });
   after(() => env.close());
 
-  const line = i => page.locator('.line').nth(i);
+  const igt = i => page.locator('.igt').nth(i);
 
   it('edits a gloss cell; Tab moves on, Escape stops', async () => {
-    await line(0).locator('.row.glmorph').nth(2).click();
+    await igt(0).locator('.row.glmorph').nth(2).click();
     const input = page.locator('input.cell-input');
     assert.equal(await input.inputValue(), 'boy-NOM.PL');
     assert.ok(await input.evaluate(e => e === document.activeElement));
@@ -23,31 +23,31 @@ describe('editing', () => {
     await input.press('Tab');
     assert.equal(await page.locator('input.cell-input').inputValue(), 'laugh-3PL.PRS');
     await page.keyboard.press('Escape');
-    assert.match((await line(0).locator('.diags').innerText()), /has 2 morpheme\(s\) but its gloss .* has 3/);
-    assert.match((await line(0).locator('.diags li').first().innerText()), /^(Error|Warning)\b/);
+    assert.match((await igt(0).locator('.diags').innerText()), /has 2 morphemes but its gloss .* has 3/);
+    assert.match((await igt(0).locator('.diags li').first().innerText()), /^(Error|Warning)\b/);
   });
 
   it('undoes and redoes', async () => {
     await page.getByRole('button', { name: 'Undo' }).click();
-    assert.equal(await line(0).locator('.diags li').count(), 0);
+    assert.equal(await igt(0).locator('.diags li').count(), 0);
     await page.getByRole('button', { name: 'Redo' }).click();
-    assert.equal(await line(0).locator('.diags li').count(), 1);
+    assert.equal(await igt(0).locator('.diags li').count(), 1);
     await page.getByRole('button', { name: 'Undo' }).click();
   });
 
-  it('edits a line as source, with a live preview', async () => {
-    await line(0).hover();
-    await line(0).getByRole('button', { name: 'Edit source' }).click();
+  it('edits an IGT as source, with a live preview', async () => {
+    await igt(0).hover();
+    await igt(0).getByRole('button', { name: 'Edit source' }).click();
     const source = page.locator('textarea.source');
     await source.fill((await source.inputValue()).replace('The sailor sings', 'THE SAILOR sings'));
     assert.match(await page.locator('.preview').innerText(), /THE SAILOR/);
     await page.getByRole('button', { name: 'Apply' }).click();
-    assert.match(await line(0).locator('.free').innerText(), /THE SAILOR sings/);
+    assert.match(await igt(0).locator('.free').innerText(), /THE SAILOR sings/);
   });
 
   it('opens the whole document as source', async () => {
     await page.getByRole('button', { name: 'Document source' }).click();
-    assert.match(await page.locator('textarea.source').inputValue(), /^\\glosshubformat 1\n\\title Latin sentences[\s\S]*\\text Nauta canit,[^\n]*\n\\morph Naut-a/);
+    assert.match(await page.locator('textarea.source').inputValue(), /^\\glosshubformat 2\n\\title Latin sentences[\s\S]*\\text Nauta canit,[^\n]*\n {2}\\morph Naut-a/);
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
@@ -62,61 +62,82 @@ describe('editing', () => {
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
-  it('fills a \\morph row from the words', async () => {
-    await page.getByRole('button', { name: '+ Add line' }).click();
+  it('fills a \\morph tier from the words', async () => {
+    await page.getByRole('button', { name: '+ Add IGT' }).click();
     const source = page.locator('textarea.source');
     await source.fill('\\ex\n\\text Arma virumque, canō');
     await page.getByRole('button', { name: '\\morph', exact: true }).click();
-    assert.equal(await source.inputValue(), '\\ex\n\\text Arma virumque, canō\n\\morph Arma virumque canō');
+    assert.equal(await source.inputValue(), '\\ex\n\\text Arma virumque, canō\n  \\morph Arma virumque canō');
     assert.ok(await page.getByRole('button', { name: '\\morph', exact: true }).isDisabled());
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
 
-  it('adds a line after a given line, with its own editor there', async () => {
-    const before = await page.locator('.line').count();
-    await line(0).getByRole('button', { name: '+ Line' }).click();
-    const editor = page.locator('.line.editing');
-    assert.equal(await editor.locator('.label').innerText(), 'New line');
-    // A new line starts with only \ex and \text.
-    assert.equal(await editor.locator('textarea').inputValue(), '\\ex\n\\text ');
-    // The editor stands right after the first line.
-    assert.ok(await page.locator('.line').nth(1).evaluate(e => e.classList.contains('editing')));
-    await editor.locator('textarea').fill('\\ex\n\\text Inserted words');
+  it('fills the transliteration’s \\morph tier from \\text[translit]', async () => {
+    await page.getByRole('button', { name: '+ Add IGT' }).click();
+    const source = page.locator('textarea.source');
+    await source.fill('\\ex\n\\text כתב\n\\text[translit] katav');
+    await page.getByRole('button', { name: '\\morph[translit]', exact: true }).click();
+    assert.equal(await source.inputValue(), '\\ex\n\\text כתב\n\\text[translit] katav\n  \\morph[translit] katav');
+    await page.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  it('adds an IGT after a given one, with its own editor there', async () => {
+    const before = await page.locator('.igt').count();
+    await igt(0).getByRole('button', { name: '+ IGT' }).click();
+    const editor = page.locator('.igt.editing');
+    assert.equal(await editor.locator('.label').innerText(), 'New IGT');
+    // A new IGT starts with only \igt and \text.
+    assert.equal(await editor.locator('textarea').inputValue(), '\\igt\n\\text ');
+    // The editor stands right after the first IGT.
+    assert.ok(await page.locator('.igt').nth(1).evaluate(e => e.classList.contains('editing')));
+    await editor.locator('textarea').fill('\\igt\n\\text Inserted words');
     await page.getByRole('button', { name: 'Apply' }).click();
-    assert.equal(await page.locator('.line').count(), before + 1);
-    assert.match(await line(1).innerText(), /Inserted/);
+    assert.equal(await page.locator('.igt').count(), before + 1);
+    assert.match(await igt(1).innerText(), /Inserted/);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    assert.equal(await page.locator('.line').count(), before);
+    assert.equal(await page.locator('.igt').count(), before);
+  });
+
+  it('lists a disagreement between the two syllable tiers under the IGT, once applied', async () => {
+    const before = await page.locator('.igt').count();
+    await igt(0).getByRole('button', { name: '+ IGT' }).click();
+    await page.locator('.igt.editing textarea').fill(
+      '\\igt\n\\text ab cd\n  \\syl a-b‿c-d\n\\text[translit] abc d\n  \\syl[translit] a-bc d');
+    await page.getByRole('button', { name: 'Apply' }).click();
+    assert.match(await igt(1).locator('.diags').innerText(),
+                 /\\syl and \\syl\[translit\] divide the words at different syllables/);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    assert.equal(await page.locator('.igt').count(), before);
   });
 
   it('keeps edits after a reload', async () => {
-    await line(1).locator('.row.glword').first().click();
+    await igt(1).locator('.row.glword').first().click();
     await page.locator('input.cell-input').fill('EDITED');
     await page.locator('input.cell-input').press('Enter');
     await page.reload();
-    await page.waitForSelector('.line');
-    assert.equal(await line(1).locator('.row.glword').first().innerText(), 'EDITED');
+    await page.waitForSelector('.igt');
+    assert.equal(await igt(1).locator('.row.glword').first().innerText(), 'EDITED');
   });
 
   it('keeps edits to a published text as the reader’s version', async () => {
     await open(page, 'aeneid');
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
-    await page.locator('.line').nth(1).locator('.row.glword').first().click();
+    await page.locator('.igt').nth(1).locator('.row.glword').first().click();
     await page.locator('input.cell-input').fill('EDITED');
     await page.locator('input.cell-input').press('Enter');
     assert.match(await page.locator('.notice-box').innerText(), /edited version/);
     await page.reload();
-    await page.waitForSelector('.line');
-    assert.equal(await page.locator('.line').nth(1).locator('.row.glword').first().innerText(), 'EDITED');
+    await page.waitForSelector('.igt');
+    assert.equal(await page.locator('.igt').nth(1).locator('.row.glword').first().innerText(), 'EDITED');
     await page.getByRole('button', { name: 'Discard my changes' }).click();
     await page.getByRole('button', { name: 'Click again to discard' }).click();
-    assert.notEqual(await page.locator('.line').nth(1).locator('.row.glword').first().innerText(), 'EDITED');
+    assert.notEqual(await page.locator('.igt').nth(1).locator('.row.glword').first().innerText(), 'EDITED');
     await open(page, 'latin');
   });
 
-  it('a document change reaches every line', async () => {
+  it('a document change reaches every IGT', async () => {
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
-    const color = () => page.locator('.line').last().locator('[style*=color]').first().getAttribute('style');
+    const color = () => page.locator('.igt').last().locator('[style*=color]').first().getAttribute('style');
     const before = await color();
     await page.getByRole('button', { name: 'Document source' }).click();
     const source = page.locator('textarea.source');
@@ -125,6 +146,17 @@ describe('editing', () => {
     assert.match(await color(), /rgb\(0, 170, 0\)/);
     await page.getByRole('button', { name: 'Undo' }).click();
     assert.equal(await color(), before);
+  });
+
+  it('Ctrl+Enter applies the document source too', async () => {
+    await page.getByRole('button', { name: 'Document source' }).click();
+    const source = page.locator('textarea.source');
+    await source.fill((await source.inputValue()).replace('\\title Latin sentences', '\\title Latin sentences, edited'));
+    await source.press('Control+Enter');
+    assert.equal(await page.locator('textarea.source').count(), 0);
+    assert.equal(await page.locator('h1.title').innerText(), 'Latin sentences, edited');
+    await page.getByRole('button', { name: 'Undo' }).click();
+    assert.equal(await page.locator('h1.title').innerText(), 'Latin sentences');
   });
 
   it('Read mode shows no editing controls', async () => {
@@ -138,9 +170,9 @@ describe('editing', () => {
     await page.getByRole('button', { name: 'Blank' }).click();
     await page.waitForFunction(() => /^#d/.test(location.hash));
     assert.equal(await page.locator('.mode-switch [aria-pressed=true]').innerText(), 'Edit');
-    // It has no lines yet, only the button to add one.
-    assert.equal(await page.locator('.line').count(), 0);
-    assert.ok(await page.getByRole('button', { name: '+ Add line' }).isVisible());
+    // It has no IGTs yet, only the button to add one.
+    assert.equal(await page.locator('.igt').count(), 0);
+    assert.ok(await page.getByRole('button', { name: '+ Add IGT' }).isVisible());
     assert.deepEqual(page.errors, []);
   });
 });

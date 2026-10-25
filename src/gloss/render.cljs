@@ -2,11 +2,11 @@
   "Hiccup for the interlinear view. Every row is derived from the document
   plus the view settings; nothing here holds state. The views are in order
   from the smallest up: gloss elements, the pieces of a word, a word's
-  cells, a line, and the parts of a page around lines.
+  cells, an IGT, and the parts of a page around IGTs.
 
-  A line is drawn from its layout (gloss.layout): each word cut into pieces
+  An IGT is drawn from its layout (gloss.layout): each word cut into pieces
   wherever a morpheme, syllable, root, ruby reading or formatting boundary
-  falls, grouped by syllable. `line-body` → `words-block` → `word-view` →
+  falls, grouped by syllable. `igt-body` → `words-block` → `word-view` →
   the cells (`text-row`, `gloss-cell`, …) → `syls-view` → `piece-view`."
   (:require [clojure.string :as str]
             [gloss.chars :as chars]
@@ -15,7 +15,7 @@
             [gloss.model :as model]
             [gloss.morph :as morph]
             [gloss.notes :as notes]
-            [gloss.rows :as rows]
+            [gloss.tiers :as tiers]
             [gloss.vocab :as vocab]))
 
 (def nbsp
@@ -33,25 +33,25 @@
 ;; Every view takes `ctx`, made once per render by `context`:
 ;;   :doc          the document
 ;;   :view         the display settings as the views read them (effective-view)
-;;   :layer-order  the order of the rows under each word
+;;   :row-order    the order of the rows under each word
 ;;   :ui           the edit state (:editing, :draft, …), when editing
 ;;   :vocab        the document's abbreviations
 ;;   :note-numbers note key → number
 ;; and the pages add:
 ;;   :read?        a reading page: nothing is editable
 ;;   :hl-keys      the notes whose words are highlighted
-;;   :hl-words     this line's highlighted word indices
-;; and, within a line, line-body and words-block add:
+;;   :hl-words     this IGT's highlighted word indices
+;; and, within an IGT, igt-body and words-block add:
 ;;   :scan-row     the surface scansion is drawn over ("text", "translit", nil)
-;;   :ruby-samples a reading from this line, to keep rows aligned
+;;   :ruby-samples a reading from this IGT, to keep rows aligned
 
 (defn effective-view
-  "The settings the views read, after applying the row switches: a row that
-  is off hides everything in it, while its own settings are kept for when it
-  comes back on."
+  "The settings the views read, after applying the group switches: a group
+  that is off hides everything in it, while its own settings are kept for
+  when it comes back on."
   [v]
-  (let [orth? (:orthography-row v), gloss? (:glossing-row v), scan? (:scansion-row v)
-        comm? (:commentary-row v), mark? (:marking-row v)
+  (let [orth? (:orthography-group v), gloss? (:glossing-group v), scan? (:scansion-group v)
+        comm? (:commentary-group v), mark? (:marking-group v)
         place (fn [k] (if comm? (get v k) :none))]
     {:scansion (boolean (and scan? (:marks v)))
      :syllables (boolean (and scan? (:syllables v)))
@@ -81,11 +81,11 @@
   [doc view ui]
   {:doc doc
    :view (let [v (effective-view view)]
-           ;; "Tags only" needs grammatical abbreviations to show.
+           ;; "Grammatical only" needs glossing abbreviations to show.
            (cond-> v
-             (and (= :tags (:gloss v)) (not ((model/doc-features doc) :gram))) (assoc :gloss :full)))
+             (and (= :grammatical (:gloss v)) (not ((model/doc-features doc) :gram))) (assoc :gloss :full)))
    ;; The reader's own order for this text, else the document's \order.
-   :layer-order (model/layer-order doc (:reader-order view))
+   :row-order (model/row-order doc (:reader-order view))
    :ui ui
    :vocab (vocab/document-vocab doc)
    :note-numbers (notes/note-numbers doc)})
@@ -101,22 +101,24 @@
       {:color (:color rule)})))
 
 (defn- gram
-  "A grammatical label: in small capitals, with its full name on hover."
+  "A glossing abbreviation: in small capitals, with its full name on hover.
+  A lowercase n, the prefix non- (nSG), stays lowercase."
   [ctx el]
   (let [full (vocab/lookup (:vocab ctx) el)]
     [:abbr.gram {:title (or full "not in the glossing vocabulary")
                  :class (when-not full "unknown")
-                 ;; Only the tag a rule names is colored.
+                 ;; Only the abbreviation a rule names is colored.
                  :style (color-style ctx el)}
-     (str/lower-case el)]))
+     (for [part (re-seq #"[a-z]+|[^a-z]+" el)]
+       (if (re-matches #"[a-z]+" part) [:span.lower part] (str/lower-case part)))]))
 
 (defn- gloss-part
-  "One morpheme's gloss: grammatical elements in small caps with their full
-  name on hover, lexical elements as typed."
+  "One morpheme's gloss as typed, its grammatical elements in small caps
+  with their full name on hover, wherever they stand: write\\PST,
+  boy[NOM.SG], eye(N), 1>3."
   [ctx text]
-  (interpose "."
-             (for [el (vocab/gloss-elements text)]
-               (if (vocab/grammatical? el) (gram ctx el) el))))
+  (for [piece (vocab/gloss-pieces text)]
+    (if (vocab/grammatical? piece) (gram ctx piece) piece)))
 
 (defn- style-classes
   "Classes for formatting styles."
@@ -125,7 +127,7 @@
 
 (defn- text-styles
   "The formatting row `row` takes from \\text at `word` (and its text
-  morphemes `js`), when the reader shows formatting (gloss.rows says which
+  morphemes `js`), when the reader shows formatting (gloss.tiers says which
   rows take it, gloss.model/styles-from-text how)."
   [ctx row word & [js]]
   (if (get-in ctx [:view :text-fmt])
@@ -196,14 +198,23 @@
         (root-gloss ctx (when js (map #(morph/merge-segments % js) surface-segs)) (:text g))]
        (when (:infix? g) [:span.sep ">"])])))
 
-(defn- tag-gloss
-  "Only the grammatical elements of the word's gloss, e.g. ACC.PL."
+(defn- grammatical-gloss
+  "Only the grammatical elements of the word's gloss, its abbreviations:
+  ACC.PL for cause-ACC.PL. Each morpheme keeps its separator, so go-PST-PL
+  shows PST-PL (a period would make them one morpheme); a morpheme without
+  an abbreviation is left out."
   [ctx word]
-  (interpose "."
-             (for [g (:glmorph word)
-                   el (vocab/gloss-elements (:text g))
-                   :when (vocab/grammatical? el)]
-               (gram ctx el))))
+  (let [kept (keep (fn [g]
+                     (when-let [els (seq (filter vocab/grammatical? (vocab/gloss-elements (:text g))))]
+                       (assoc g :els els)))
+                   (:glmorph word))]
+    (map-indexed (fn [i {:keys [els sep infix?]}]
+                   (list (cond
+                           infix? [:span.sep "<"]
+                           (and (pos? i) sep) [:span.sep sep])
+                         (interpose "." (map #(gram ctx %) els))
+                         (when infix? [:span.sep ">"])))
+                 kept)))
 
 ;; ---------------------------------------------------------------------------
 ;; Words
@@ -321,7 +332,7 @@
   "A word's \\text cell: its pieces (in syllable groups, with the metrical
   marks when the scansion is drawn over the text), its punctuation, its
   link, and the numbers of the notes that end on it."
-  [ctx line wl]
+  [ctx igt wl]
   (let [{:keys [view]} ctx
         word (:word wl)
         scan? (= "text" (:scan-row ctx))]
@@ -370,7 +381,7 @@
   "A word's transcription in row `row`, raw IPA, in its delimiters."
   [word row]
   (when-let [t (not-empty (get word (keyword row)))]
-    (let [[open close] (get-in rows/by-name [row :delimiters])]
+    (let [[open close] (get-in tiers/by-name [row :delimiters])]
       (list [:span.delim open] t [:span.delim close]))))
 
 (defn- editable
@@ -385,10 +396,10 @@
 
 (defn- cell
   "Word `i`'s cell in row `row`; editable in the editor. An edit's target
-  is {:row :line :word}, or for content not under a word {:row \"ft\"
-  :line}, {:row \"note\" :note key} or {:row \"title\"}."
-  [ctx line i row row-class title content]
-  (let [target {:line (:id line) :row row :word i}]
+  is {:row :igt :word}, or for content not under a word {:row \"ft\"
+  :igt}, {:row \"note\" :note key} or {:row \"title\"}."
+  [ctx igt i row row-class title content]
+  (let [target {:igt (:id igt) :row row :word i}]
     (if (editing? ctx target)
       [:span.row {:class row-class} (cell-editor ctx)]
       [:span.row (editable ctx target title {:class row-class})
@@ -396,40 +407,40 @@
 
 (defn- translit-cell
   "A word's transliteration cell."
-  [ctx line wl]
-  (cell ctx line (:index wl) "translit" "translit" "Click to edit the transliteration"
+  [ctx igt wl]
+  (cell ctx igt (:index wl) "translit" "translit" "Click to edit the transliteration"
         (when (get-in wl [:syls "translit"]) (translit-pieces ctx wl))))
 
 (defn- transcription-cell
   "A word's cell in transcription row `row`."
-  [ctx line wl row]
-  (cell ctx line (:index wl) row ["transcription" row]
-        (str "Click to edit the " (str/lower-case (rows/layer-label row)))
+  [ctx igt wl row]
+  (cell ctx igt (:index wl) row ["transcription" row]
+        (str "Click to edit the " (str/lower-case (tiers/row-label row)))
         (transcription-view (:word wl) row)))
 
 (defn- gloss-cell
-  "The morphemic gloss: in full, or only its grammatical tags; flagged when
+  "The morphemic gloss: in full, or only its abbreviations; flagged when
   it has more or fewer morphemes than the word."
-  [ctx line wl]
+  [ctx igt wl]
   (let [word (:word wl)
         mismatch? (and (seq (:glmorph word)) (not= (count (:glmorph word)) (model/morph-count word)))]
-    (cell ctx line (:index wl) "glmorph" ["glmorph" (when mismatch? "mismatch")] "Click to edit the morphemic gloss"
-          (if (= :tags (get-in ctx [:view :gloss])) (tag-gloss ctx word) (full-gloss ctx word)))))
+    (cell ctx igt (:index wl) "glmorph" ["glmorph" (when mismatch? "mismatch")] "Click to edit the morphemic gloss"
+          (if (= :grammatical (get-in ctx [:view :gloss])) (grammatical-gloss ctx word) (full-gloss ctx word)))))
 
 (defn- pos-cell
-  "Parts of speech, one tag per clitic group."
-  [ctx line wl]
-  (cell ctx line (:index wl) "pos" "pos" "Click to edit the part of speech"
+  "Parts of speech, one per syntactic word."
+  [ctx igt wl]
+  (cell ctx igt (:index wl) "pos" "pos" "Click to edit the part of speech"
         (let [parts (vocab/pos-parts (:pos (:word wl)))]
           (when (seq parts)
             (interpose [:span.sep "="] (map #(pos-tag % (= :full (get-in ctx [:view :pos]))) parts))))))
 
 (defn- glword-cell
   "The informal gloss: with its own formatting if it has any, else the
-  text's (gloss.rows :own+from-text)."
-  [ctx line wl]
+  text's (gloss.tiers :own+from-text)."
+  [ctx igt wl]
   (let [word (:word wl)]
-    (cell ctx line (:index wl) "glword" "glword" "Click to edit the informal gloss"
+    (cell ctx igt (:index wl) "glword" "glword" "Click to edit the informal gloss"
           (when-not (str/blank? (:glword word))
             (if (seq (:glword-fmt word))
               (formatted (:glword word) (when (get-in ctx [:view :text-fmt]) (:glword-fmt word)))
@@ -437,14 +448,14 @@
 
 (defn- row-cell
   "A word's cell in row `row`."
-  [ctx line wl row]
+  [ctx igt wl row]
   (case row
-    "text" (text-row ctx line wl)
-    "translit" (translit-cell ctx line wl)
-    "glmorph" (gloss-cell ctx line wl)
-    "glword" (glword-cell ctx line wl)
-    "pos" (pos-cell ctx line wl)
-    (transcription-cell ctx line wl row)))
+    "text" (text-row ctx igt wl)
+    "translit" (translit-cell ctx igt wl)
+    "glmorph" (gloss-cell ctx igt wl)
+    "glword" (glword-cell ctx igt wl)
+    "pos" (pos-cell ctx igt wl)
+    (transcription-cell ctx igt wl row)))
 
 (defn- shown?
   "Whether the reader shows row `row` (gloss.model/row-setting)."
@@ -454,22 +465,22 @@
         (boolean (and v (not= :none v))))))
 
 (defn- word-view
-  "A word's column: its rows that are shown, in the layer order. `filled`
-  are the rows this line has content for, so a row that is empty on every
-  word of the line isn't drawn. With `text-only?`, just the text (for the
+  "A word's column: its rows that are shown, in the row order. `filled`
+  are the rows this IGT has content for, so a row that is empty on every
+  word of the IGT isn't drawn. With `text-only?`, just the text (for the
   unbroken scansion line above sublines)."
-  [ctx line wl filled & {:keys [text-only?]}]
+  [ctx igt wl filled & {:keys [text-only?]}]
   [:span.word {:class [(when (contains? (:hl-words ctx) (:index wl)) "note-hl")]}
    (if text-only?
      (if (= "translit" (:scan-row ctx))
        [:span.row.translit (translit-pieces ctx wl)]
-       (text-row ctx line wl))
-     (for [row (:layer-order ctx)
+       (text-row ctx igt wl))
+     (for [row (:row-order ctx)
            :when (and (or (= row "text") (filled row)) (shown? (:view ctx) row))]
-       (row-cell ctx line wl row)))])
+       (row-cell ctx igt wl row)))])
 
 ;; ---------------------------------------------------------------------------
-;; Lines
+;; IGTs
 
 (defn- note-item
   "One note: its number and text. Clicking the number (or, when reading,
@@ -493,16 +504,16 @@
             :else [:em.missing "No text for this note"]))])]))
 
 (defn- notes-view
-  "The notes shown under a line, in number order."
-  [ctx line first-cited]
+  "The notes shown under an IGT, in number order."
+  [ctx igt first-cited]
   (when-let [ks (seq (sort-by (:note-numbers ctx) first-cited))]
     [:ol.notes {:dir "ltr"}
      (for [k ks]
-       (note-item ctx k {:line (:id line) :row "note" :note k}))]))
+       (note-item ctx k {:igt (:id igt) :row "note" :note k}))]))
 
 (defn end-notes
   "Notes after the text: all of them, in order, when notes are placed below
-  the full text; otherwise those shown under no line."
+  the full text; otherwise those shown under no IGT."
   [ctx]
   (let [numbers (:note-numbers ctx)
         ks (when (get-in ctx [:view :notes])
@@ -517,14 +528,14 @@
           (note-item ctx k {:row "note" :note k}))]])))
 
 (def subline-labels
-  "The labels of a line's sublines, in order."
+  "The labels of an IGT's sublines, in order."
   "abcdefghijklmnopqrstuvwxyz")
 
 (defn sublines
-  "Splits a line's display units at its subline breaks:
+  "Splits an IGT's display units at its subline breaks:
   [[label units] ...], or one unlabelled group when there are no breaks."
-  [line units]
-  (let [breaks (:breaks line)
+  [igt units]
+  (let [breaks (:breaks igt)
         sub-of (fn [unit] (count (filter #(<= % (:index (first (:words unit)))) breaks)))]
     (if (empty? breaks)
       [[nil units]]
@@ -535,98 +546,119 @@
   "The words of `units`, each a column of its cells. With `scanned?`, room
   is left above the text for metrical marks; with `text-only?`, only the
   text is drawn."
-  [ctx line units filled & {:keys [scanned? text-only?]}]
+  [ctx igt units filled & {:keys [scanned? text-only?]}]
   (let [ctx (assoc ctx :ruby-samples
-                   ;; A reading from this line, if it has any, for the
+                   ;; A reading from this IGT, if it has any, for the
                    ;; invisible readings of cells without one (with-ruby-strut).
-                   (into {} (for [w (:words line), r (:ruby w)] ["text" (:text r)])))]
+                   (into {} (for [w (:words igt), r (:ruby w)] ["text" (:text r)])))]
     [:div.words {:class [(when scanned? (if (= "translit" (:scan-row ctx)) "scanned-translit" "scanned"))
-                         (when (and (get-in ctx [:view :ruby]) (some :ruby (:words line))) "has-ruby")]}
+                         (when (and (get-in ctx [:view :ruby]) (some :ruby (:words igt))) "has-ruby")]}
      (for [unit units]
        [:span.unit
-        (for [wl (:words unit)] (word-view ctx line wl filled :text-only? text-only?))])]))
+        (for [wl (:words unit)] (word-view ctx igt wl filled :text-only? text-only?))])]))
 
 (defn- free-view
-  "A line's free translation: editable in Edit mode, where a line without
+  "An IGT's free translation: editable in Edit mode, where an IGT without
   one offers to add it."
-  [ctx line]
-  (let [free-target {:line (:id line) :row "ft"}]
+  [ctx igt]
+  (let [free-target {:igt (:id igt) :row "ft"}]
     (cond
       (editing? ctx free-target)
       [:div.free {:dir "ltr"} (cell-editor ctx)]
-      (not (str/blank? (:free line)))
+      (not (str/blank? (:free igt)))
       [:div.free (editable ctx free-target "Click to edit the free translation" {:dir "ltr"})
-       (prose (:free line))]
+       (prose (:free igt))]
       (:read? ctx) nil
       :else
       [:div.free.editable.empty {:dir "ltr" :on {:click [:edit/start free-target]}}
        "+ free translation"])))
 
 (def ^:private layouts
-  "Each line's layout, by the line (weakly), with the note marks it was
+  "Each IGT's layout, by the IGT (weakly), with the note marks it was
   made with: it doesn't depend on the display options, so changing them
   doesn't redo it."
   (js/WeakMap.))
 
-(defn- line-layout
-  "A line's layout (gloss.layout/line-layout), from the cache when the line
+(defn- igt-layout
+  "An IGT's layout (gloss.layout/igt-layout), from the cache when the IGT
   and its note marks are unchanged."
-  [line marks]
-  (let [[made-with units] (.get layouts line)]
+  [igt marks]
+  (let [[made-with units] (.get layouts igt)]
     (if (and units (= made-with marks))
       units
-      (let [units (layout/line-layout line marks)]
-        (.set layouts line [marks units])
+      (let [units (layout/igt-layout igt marks)]
+        (.set layouts igt [marks units])
         units))))
 
-(defn line-body
-  "The interlinear block for a line (without the line's toolbar).
+(defn igt-body
+  "The interlinear block for an IGT (without the IGT's toolbar).
 
-  A line split into sublines shows each subline under its letter. If the
-  line also has scansion, the whole line is first shown unbroken with its
+  An IGT split into sublines shows each subline under its letter. If the
+  IGT also has scansion, its whole line is first shown unbroken with its
   metrical marks, so the meter isn't interrupted, and the sublines below
   carry the glosses."
-  [ctx line {:keys [first-cited]}]
+  [ctx igt {:keys [first-cited]}]
   (let [{:keys [view]} ctx
-        units (line-layout line (get-in (notes/note-index (:doc ctx)) [:marks (:id line)]))
-        filled (model/line-rows line)
+        units (igt-layout igt (get-in (notes/note-index (:doc ctx)) [:marks (:id igt)]))
+        filled (model/igt-rows igt)
         ;; The surface the scansion is drawn over: the text when it has
         ;; syllables, else the transliteration when it is shown.
         scan-row (when (:scansion view)
-                   (cond (model/prosody line "text") "text"
-                         (and (model/prosody line "translit") (:translit view)) "translit"))
+                   (cond (model/prosody igt "text") "text"
+                         (and (model/prosody igt "translit") (:translit view)) "translit"))
         ctx (assoc ctx :scan-row scan-row)
         scan? (some? scan-row)
-        subs (sublines line units)
+        subs (sublines igt units)
         split? (some first subs)
         main (list
               (when (and scan? split?)
                 [:div.scan-line
-                 (words-block (update ctx :view assoc :notes false) line units filled
+                 (words-block (update ctx :view assoc :notes false) igt units filled
                               :scanned? true :text-only? true)])
               (if split?
                 (let [ctx (if scan? (-> ctx (update :view assoc :scansion false) (assoc :scan-row nil)) ctx)]
                   (for [[label group] subs]
                     [:div.subline
                      [:span.sub-label label]
-                     (words-block ctx line group filled)]))
-                (words-block ctx line units filled :scanned? scan?)))
-        free (when (:free view) (free-view ctx line))
+                     (words-block ctx igt group filled)]))
+                (words-block ctx igt units filled :scanned? scan?)))
+        free (when (:free view) (free-view ctx igt))
         notes (when (and (:notes view) (not (:notes-end? view)))
-                (notes-view ctx line (if (some? first-cited)
-                                       first-cited
-                                       (get (notes/first-cited (:doc ctx)) (:id line)))))
+                (notes-view ctx igt (if (some? first-cited)
+                                      first-cited
+                                      (get (notes/first-cited (:doc ctx)) (:id igt)))))
         side (filter some? [(when (:free-side? view) free) (when (:notes-side? view) notes)])
         below (filter some? [(when-not (:free-side? view) free) (when-not (:notes-side? view) notes)])]
-    [:div.line-grid {:class (when (seq side) "with-side")}
-     [:div.line-main main below]
-     (when (seq side) [:aside.line-side {:dir "ltr"} side])]))
+    [:div.igt-grid {:class (when (seq side) "with-side")}
+     [:div.igt-main main below]
+     (when (seq side) [:aside.igt-side {:dir "ltr"} side])]))
 
 (defn section-heading
-  "The heading a section's lines are shown under."
+  "The heading a section's IGTs are shown under."
   [section]
   (when section
     [:h2.section-heading (or (not-empty (:title section)) (:label section))]))
+
+(defn igt-view
+  "An IGT as read: its label above its body (`igt-body`)."
+  [ctx igt label first-cited]
+  [:div.igt {:dir (get-in ctx [:doc :dir])}
+   [:div.igt-head [:span.label label]]
+   (igt-body ctx igt {:first-cited first-cited})])
+
+(defn igts-view
+  "Every IGT of the document as read (`igt-view`), each section's heading
+  before its first. A text's page draws them the same way, but through a
+  cache (gloss.app.text)."
+  [ctx]
+  (let [doc (:doc ctx)
+        labels (model/igt-labels doc)
+        starts (model/section-starts doc)
+        cited (notes/first-cited doc)
+        hl (notes/highlighted-words doc (:hl-keys ctx))]
+    (for [igt (:igts doc) :let [id (:id igt)]]
+      (list (section-heading (starts id))
+            (igt-view (assoc ctx :hl-words (hl id)) igt (labels id) (cited id))))))
 
 (defn diagnostics-view
   "Problems, most specific first, each labelled Error or Warning. With

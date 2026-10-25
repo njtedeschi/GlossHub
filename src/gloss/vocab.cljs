@@ -109,40 +109,75 @@
   (merge leipzig extras))
 
 (defn grammatical?
-  "Whether a gloss element is a grammatical label. By the Leipzig
-  convention, labels are written in capitals (with person and number
-  digits: 3SG), lexical glosses in lowercase."
+  "Whether a gloss element is a glossing abbreviation. By the Leipzig
+  convention, abbreviations are written in capitals (with person and number
+  digits: 3SG), lexical glosses in lowercase; the prefix non- may also be a
+  lowercase n (nSG, 3nSG)."
   [element]
-  (boolean (re-matches #"[0-9]*[A-Z][0-9A-Z]*|[0-9]+" element)))
+  (boolean (re-matches #"[0-9]*n?[A-Z][0-9A-Z]*|[0-9]+" element)))
+
+(def ^:private gloss-piece
+  "A piece of a morpheme's gloss: one of the Leipzig symbols around and
+  between its elements, captured (. : ; and a backslash, a non-segmental
+  change, between them; [ ] (not overt) and ( ) (inherent) around them; <
+  and > between persons, 1>3), or a run of anything else."
+  #"([.:;\\\[\]()<>])|[^.:;\\\[\]()<>]+")
+
+(defn gloss-pieces
+  "One morpheme's gloss as written, cut into its elements and the symbols
+  around them, e.g. \"boy[NOM.SG]\" -> [\"boy\" \"[\" \"NOM\" \".\" \"SG\" \"]\"]."
+  [gloss]
+  (mapv first (re-seq gloss-piece (str gloss))))
 
 (defn gloss-elements
   "Splits one morpheme's gloss into its meta-language elements, e.g.
-  \"ABL.N.SG\" -> [\"ABL\" \"N\" \"SG\"]. Lexical glosses written with spaces
-  or periods (\"so many\", \"come.out\") stay together."
+  \"ABL.N.SG\" -> [\"ABL\" \"N\" \"SG\"], \"write\\\\PST\" -> [\"write\" \"PST\"].
+  Lexical glosses written with spaces or periods (\"so many\", \"come.out\")
+  stay together."
   [gloss]
   (if (str/blank? gloss)
     []
-    (let [parts (str/split gloss #"[.:;]")]
-      ;; Re-join runs of lexical parts so "come.out" is one element.
-      (->> parts
-           (partition-by grammatical?)
-           (mapcat (fn [run]
-                     (if (grammatical? (first run))
-                       run
-                       [(str/join "." run)])))
-           (remove str/blank?)
-           vec))))
+    ;; Re-join runs of lexical parts so "come.out" is one element.
+    (->> (re-seq gloss-piece gloss)
+         (keep (fn [[piece symbol]] (when-not symbol piece)))
+         (partition-by grammatical?)
+         (mapcat (fn [run]
+                   (if (grammatical? (first run))
+                     run
+                     [(str/join "." run)])))
+         (remove str/blank?)
+         vec)))
+
+(def ^:private non-prefixes
+  "How the Leipzig prefix non- (N-) is written before an abbreviation, the
+  longest first: NONSG, NSG or nSG (the n shown in lowercase)."
+  ["NON" "N" "n"])
+
+(defn- lookup*
+  "`lookup`, with the prefix non- read only when `non?`, so that it is read
+  once (NNSG isn't non-non-singular)."
+  [vocab tag non?]
+  (or (get vocab tag)
+      (when non?
+        (some (fn [p]
+                (when (and (str/starts-with? tag p) (> (count tag) (count p)))
+                  (some->> (lookup* vocab (subs tag (count p)) false) (str "non-"))))
+              non-prefixes))
+      (when-let [[_ person rest] (re-matches #"([123]+)(\D.*)" tag)]
+        (let [names (keep #(get vocab (str %)) person)
+              rest-name (lookup* vocab rest non?)]
+          (when (and rest-name (= (count names) (count person)))
+            (str (str/join "/" names) " " rest-name))))))
 
 (defn lookup
   "Full name of an abbreviation, or nil if unknown. Composite person+number
-  labels such as 1SG or 3PL are decomposed."
+  labels such as 1SG or 3PL are decomposed, and any abbreviation can take
+  the prefix non-, written NON, N or n: NSG, NONSG and nSG are non-singular,
+  3NSG is third person non-singular. An abbreviation of the vocabulary's
+  own comes first, so NEG stays negation, and a text's \\abbr NSG means what
+  the text says."
   [vocab tag]
-  (or (get vocab tag)
-      (when-let [[_ person rest] (re-matches #"([123]+)([A-Z]+)" tag)]
-        (let [names (keep #(get vocab (str %)) person)
-              rest-name (get vocab rest)]
-          (when (and rest-name (= (count names) (count person)))
-            (str (str/join "/" names) " " rest-name))))))
+  (lookup* vocab tag true))
 
 (defn document-vocab
   "The vocabulary in effect for a document."

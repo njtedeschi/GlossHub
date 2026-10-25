@@ -1,39 +1,42 @@
 (ns gloss.model
   "The document model: what a parsed document is, and what can be read off
-  it. A document is plain data (docs/design.md shows its shape); the
-  functions here answer questions about it: a word's segments on each
-  surface, the items of the rows under the words, the formatting a row
-  takes from the text, the order of the layers, and which kinds of content
-  a document has."
+  it. A document is plain data (docs/architecture.md, section 4.1, shows
+  its shape); the functions here answer questions about it: a word's
+  segments on each surface, the entries of the tiers with one for each
+  word, the formatting a tier takes from the text, the order of the rows,
+  and which kinds of content a document has."
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [gloss.chars :as chars]
             [gloss.formatting :as fmt]
             [gloss.morph :as morph]
-            [gloss.rows :as rows]
+            [gloss.tiers :as tiers]
             [gloss.vocab :as vocab]))
 
 (def format-version
-  "The version of the input format this site reads and writes, declared in
-  a text's header as `\\glosshubformat 1` (a text without the line is
-  version 1). It changes only when something already in the format changes
-  meaning; additions don't need a new version (docs/format.md §2)."
-  1)
+  "The version of the input format this site writes, declared in a text's
+  header as `\\glosshubformat 2` (a text without the line is version 1).
+  It changes only when something already in the format changes meaning or
+  stops being written; additions don't need a new version (docs/format.md
+  §2). Version 2 writes the text tiers as \\text[translit] and the like,
+  and starts each IGT with \\igt; the site reads version 1 too, and flags
+  its commands only in a text of version 2."
+  2)
 
 ;; ---------------------------------------------------------------------------
 ;; Surfaces
 ;;
-;; \text and \translit are the line's two surfaces: rows written as the
-;; words are, which the other rows analyse or gloss. Each has the same
-;; analysis rows, \morph and \syl (\morph[translit], \syl[translit]), each
-;; checked against its own surface. A word keeps, per surface, its segments
-;; (the word as written, divided by the surface's \morph item, or whole),
-;; the \morph item as written and its problems; the line keeps each
-;; surface's syllables:
+;; \text and \text[translit] are an IGT's two surfaces: the text tiers
+;; that segmentation tiers divide. Each has the same segmentation tiers,
+;; \morph and \syl (\morph[translit], \syl[translit]), each checked against
+;; its own surface. A word keeps, per surface, its segments (the word as
+;; written, divided by the surface's \morph entry, or whole), the \morph
+;; entry as written and its problems; the IGT keeps each surface's
+;; syllables:
 ;;
 ;;   word  :surfaces {"text" {:segs [...] :morph-src "Mūs-a" :morph-problems [...]}
 ;;                    "translit" {...}}
-;;   line  :prosody {"text" {:syllables ...} "translit" {...}}
+;;   igt   :prosody {"text" {:syllables ...} "translit" {...}}
 ;;
 ;; Formatting, ruby, links and punctuation belong to \text alone.
 
@@ -47,15 +50,15 @@
   (get-in word [:surfaces s :segs]))
 
 (defn morph-src
-  "A word's \\morph item on surface `s`, as written (nil without one)."
+  "A word's \\morph entry on surface `s`, as written (nil without one)."
   [word s]
   (get-in word [:surfaces s :morph-src]))
 
-(defn analysis-row
-  "The name of an analysis row (`morph`, `syl`) for surface `s`:
+(defn segmentation-tier
+  "The key of a segmentation tier (`morph`, `syl`) for surface `s`:
   \"morph\" for the text, \"morph[translit]\" for the transliteration."
-  [row s]
-  (if (= s "text") row (str row "[" s "]")))
+  [tier s]
+  (if (= s "text") tier (str tier "[" s "]")))
 
 (defn surface-word
   "A word on surface `s` as written, without the text's edge punctuation."
@@ -76,8 +79,8 @@
   "A surface's words as written, run together (no spaces or edge
   punctuation). Its syllables, and the text's ruby and morpheme boundaries,
   are offsets into it."
-  [line s]
-  (apply str (map #(surface-word % s) (:words line))))
+  [igt s]
+  (apply str (map #(surface-word % s) (:words igt))))
 
 (defn segment-ranges
   "Ranges of a word's segments from `pos`: {:start :end :morphs [[s e] …]
@@ -96,22 +99,22 @@
 
 (defn surface-ranges
   "Letter ranges of each word on surface `s`, with its morphemes and joints."
-  [line s]
+  [igt s]
   (first
    (reduce (fn [[out pos] word]
              (let [r (segment-ranges (segs word s) pos)]
                [(conj out r) (:end r)]))
            [[] 0]
-           (:words line))))
+           (:words igt))))
 
 (defn prosody
-  "A line's syllables on surface `s` (nil without a \\syl row for it)."
-  [line s]
-  (get-in line [:prosody s]))
+  "An IGT's syllables on surface `s` (nil without a \\syl tier for it)."
+  [igt s]
+  (get-in igt [:prosody s]))
 
 (defn morph-structure
   "The segments that say what a word's morphemes are: those of the first
-  surface with a \\morph item (they agree when both have one), else nil
+  surface with a \\morph entry (they agree when both have one), else nil
   (the word is one morpheme)."
   [word]
   (some #(when (morph-src word %) (segs word %)) surfaces))
@@ -122,31 +125,31 @@
   (if-let [ms (morph-structure word)] (count (morph/morphemes ms)) 1))
 
 ;; ---------------------------------------------------------------------------
-;; Word items
+;; Word entries
 ;;
-;; The rows with an item per word (gloss.rows/word-items) are stored in the
-;; word under the row's name:
+;; The tiers with an entry per word (gloss.tiers/word-entries) are stored in
+;; the word under the tier's name:
 ;;
 ;;   :glmorph   the gloss morphemes [{:text :sep :infix?}]
 ;;   :glword    the informal gloss, with its own formatting in :glword-fmt
 ;;   :pos       the part of speech as written
 ;;   :ipa, :phonemic, :phonetic   raw IPA
 ;;
-;; `read-item` reads an item, for the parser and the cell editor alike;
-;; gloss.serialize/item writes one out.
+;; `read-entry` reads an entry, for the parser and the cell editor alike;
+;; gloss.serialize/entry writes one out.
 
-(defn read-item
-  "Reads an item of row `row` (escapes hidden), ignoring the punctuation
+(defn read-entry
+  "Reads an entry of tier `tier` (escapes hidden), ignoring the punctuation
   around it except in a transcription. Returns [fields problems]: the fields
   to set on the word (nil removes one, see `put-fields`) and messages."
-  [row item]
-  (case row
-    "glmorph" (let [t (chars/strip-punct item)]
+  [tier entry]
+  (case tier
+    "glmorph" (let [t (chars/strip-punct entry)]
                 [{:glmorph (when (not= t "") (morph/split-gloss t))} []])
-    "glword" (let [{:keys [text problems] runs :fmt} (fmt/read-cell (chars/strip-punct item))]
+    "glword" (let [{:keys [text problems] runs :fmt} (fmt/read-glword (chars/strip-punct entry))]
                [{:glword (not-empty text) :glword-fmt (not-empty runs)} problems])
-    "pos" [{:pos (not-empty (str/trim (chars/strip-punct item)))} []]
-    [{(keyword row) (not-empty (str/trim item))} []]))
+    "pos" [{:pos (not-empty (str/trim (chars/strip-punct entry)))} []]
+    [{(keyword tier) (not-empty (str/trim entry))} []]))
 
 (defn put-fields
   "A word with `fields` set; a nil value removes the field."
@@ -161,22 +164,22 @@
     (let [v (get word (keyword row))]
       (if (string? v) (not (str/blank? v)) (boolean (seq v))))))
 
-(defn line-rows
-  "The rows under the words that a line has something in."
-  [line]
-  (set (for [row (remove #{"text"} rows/layers)
-             :when (some #(has-row? % row) (:words line))]
+(defn igt-rows
+  "The rows under the words that an IGT has something in."
+  [igt]
+  (set (for [row (remove #{"text"} tiers/rows)
+             :when (some #(has-row? % row) (:words igt))]
          row)))
 
 (defn doc-rows
   "The rows under the words that a document has something in."
   [doc]
-  (apply set/union #{} (map line-rows (:lines doc))))
+  (apply set/union #{} (map igt-rows (:igts doc))))
 
 ;; ---------------------------------------------------------------------------
 ;; Formatting carried from the text
 ;;
-;; Which rows take the text's formatting is in gloss.rows (:formatting).
+;; Which tiers take the text's formatting is in gloss.tiers (:formatting).
 
 (defn word-styles
   "The formatting of a whole \\text word: the styles every letter of it has."
@@ -196,13 +199,13 @@
              (fmt/common-styles (:fmt word) (filter #(and (<= s %) (< % e)) letters)))))))
 
 (defn styles-from-text
-  "The formatting row `row` takes from \\text at `word`, as gloss.rows says
-  (:from-text, :own+from-text; otherwise none): the styles of the whole
-  word, and, given `js`, the indices of the text's \\morph segments that a
-  part of the row stands for (a gloss morpheme, a morpheme of
+  "The formatting tier `tier` takes from \\text at `word`, as gloss.tiers
+  says (:from-text, :own+from-text; otherwise none): the styles of the
+  whole word, and, given `js`, the indices of the text's \\morph segments
+  that a part of the tier stands for (a gloss morpheme, a morpheme of
   \\morph[translit]), the styles common to them."
-  [row word & [js]]
-  (if-not (#{:from-text :own+from-text} (rows/formatting row))
+  [tier word & [js]]
+  (if-not (#{:from-text :own+from-text} (tiers/formatting tier))
     #{}
     (let [per (morph-styles word)
           part (when (seq js) (reduce (fn [a b] (set (filter b a))) (map #(get per % #{}) js)))]
@@ -219,25 +222,25 @@
       (first (filter #(tags (str/upper-case (:tag %))) (:colors doc))))))
 
 ;; ---------------------------------------------------------------------------
-;; Layer order
+;; Row order
 ;;
 ;; The rows under each word are drawn in an order the document can set with
-;; `\order` (by row name, any of its names; stored as standard names).
-;; Layers it doesn't list keep their default place after the listed ones.
+;; `\order` (by tier name, any of its names; stored as standard names).
+;; Rows it doesn't list keep their default place after the listed ones.
 
-(defn layer-order
-  "The order of a document's layers: the reader's own order for this text (a
+(defn row-order
+  "The order of a document's rows: the reader's own order for this text (a
   display setting) if they set one, else the document's \\order, then the
-  built-in defaults for layers neither lists."
-  ([doc] (layer-order doc nil))
+  built-in defaults for rows neither lists."
+  ([doc] (row-order doc nil))
   ([doc reader-order]
-   (let [listed (filter (set rows/layers) (if (seq reader-order) reader-order (:order doc)))]
-     (vec (distinct (concat listed rows/layers))))))
+   (let [listed (filter (set tiers/rows) (if (seq reader-order) reader-order (:order doc)))]
+     (vec (distinct (concat listed tiers/rows))))))
 
-(defn present-layers
-  "The document's layers that have content, in the order shown."
+(defn present-rows
+  "The document's rows that have content, in the order shown."
   [doc reader-order]
-  (filterv (conj (doc-rows doc) "text") (layer-order doc reader-order)))
+  (filterv (conj (doc-rows doc) "text") (row-order doc reader-order)))
 
 ;; ---------------------------------------------------------------------------
 ;; What a document contains
@@ -254,10 +257,10 @@
   :gloss :gram :pos :wgloss :morph-breaks :stems :roots :color :free :notes
   :fmt}."
   [doc]
-  (let [lines (:lines doc)
-        words (mapcat :words lines)]
+  (let [igts (:igts doc)
+        words (mapcat :words igts)]
     (cond-> (set (map row-setting (doc-rows doc)))
-      (some #(or (seq (:prosody %)) (seq (:raw %))) lines) (conj :scansion)
+      (some #(or (seq (:prosody %)) (seq (:raw %))) igts) (conj :scansion)
       (some #(seq (:ruby %)) words) (conj :ruby)
       (some (fn [w] (some #(some vocab/grammatical? (vocab/gloss-elements (:text %))) (:glmorph w))) words)
       (conj :gram)
@@ -265,33 +268,42 @@
       (some (fn [w] (some #(some :stem? (segs w %)) surfaces)) words) (conj :stems)
       (some (fn [w] (some #(some :root (segs w %)) surfaces)) words) (conj :roots)
       (seq (:colors doc)) (conj :color)
-      (some #(not (str/blank? (:free %))) lines) (conj :free)
-      (or (seq (:notes doc)) (some #(seq (:notes %)) lines)) (conj :notes)
+      (some #(not (str/blank? (:free %))) igts) (conj :free)
+      (or (seq (:notes doc)) (some #(seq (:notes %)) igts)) (conj :notes)
       (some #(seq (:fmt %)) words) (conj :fmt))))
 
 ;; ---------------------------------------------------------------------------
-;; Lines
+;; IGTs
 
-(defn line-index
-  "The position of line `line-id` among the document's lines."
-  [doc line-id]
-  (first (keep-indexed (fn [i l] (when (= line-id (:id l)) i)) (:lines doc))))
+(defn igt-index
+  "The position of IGT `igt-id` among the document's IGTs."
+  [doc igt-id]
+  (first (keep-indexed (fn [i l] (when (= igt-id (:id l)) i)) (:igts doc))))
 
-(defn line-labels
-  "Each line's label: its own, or its number within its section."
+(defn igt-labels
+  "Each IGT's label: its own, or its number within its section."
   [doc]
-  (first (reduce (fn [[out counts] line]
-                   (let [n (inc (get counts (:section line) 0))]
-                     [(assoc out (:id line) (or (:label line) (str n)))
-                      (assoc counts (:section line) n)]))
+  (first (reduce (fn [[out counts] igt]
+                   (let [n (inc (get counts (:section igt) 0))]
+                     [(assoc out (:id igt) (or (:label igt) (str n)))
+                      (assoc counts (:section igt) n)]))
                  [{} {}]
-                 (:lines doc))))
+                 (:igts doc))))
 
 (defn section-starts
-  "The sections, by the id of the line each starts with: {line-id
+  "The sections, by the id of the IGT each starts with: {igt-id
   section}."
   [doc]
   (let [by-id (into {} (map (juxt :id identity) (:sections doc)))]
-    (into {} (for [[prev line] (map vector (cons nil (:lines doc)) (:lines doc))
-                   :when (and (:section line) (not= (:section line) (:section prev)))]
-               [(:id line) (by-id (:section line))]))))
+    (into {} (for [[prev igt] (map vector (cons nil (:igts doc)) (:igts doc))
+                   :when (and (:section igt) (not= (:section igt) (:section prev)))]
+               [(:id igt) (by-id (:section igt))]))))
+
+(defn without-ids
+  "A document without its generated ids (an IGT's section given by the
+  section's label instead), to compare two readings of the same text: the
+  ids are new at every reading."
+  [doc]
+  (let [label (into {} (map (juxt :id :label) (:sections doc)))]
+    (cond-> (update doc :igts (fn [igts] (mapv #(cond-> (dissoc % :id) (:section %) (update :section label)) igts)))
+      (:sections doc) (update :sections (fn [ss] (mapv #(dissoc % :id) ss))))))

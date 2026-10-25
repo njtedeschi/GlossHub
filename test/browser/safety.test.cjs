@@ -37,15 +37,15 @@ describe('data safety', () => {
     b.errors = [];
     b.on('pageerror', e => b.errors.push(e.message));
     await b.goto(env.base + '#latin');
-    await b.waitForSelector('.line');
+    await b.waitForSelector('.igt');
 
     await a.getByRole('button', { name: 'Edit', exact: true }).click();
-    await a.locator('.line').nth(1).locator('.row.glword').first().click();
+    await a.locator('.igt').nth(1).locator('.row.glword').first().click();
     await a.locator('input.cell-input').fill('FROM-A');
     await a.locator('input.cell-input').press('Enter');
     await settle(a);
 
-    assert.equal(await b.locator('.line').nth(1).locator('.row.glword').first().innerText(), 'FROM-A');
+    assert.equal(await b.locator('.igt').nth(1).locator('.row.glword').first().innerText(), 'FROM-A');
     assert.match(await b.locator('.status-band.info').innerText(), /another tab/);
     // B took A's data without saving it back, so A hears nothing.
     const after = await saved(a);
@@ -76,7 +76,7 @@ describe('data safety', () => {
 
   it('a page that fails to render is replaced, and the site recovers', async () => {
     const page = await freshPage(env, 'latin', { withTexts: true });
-    // Make rendering a list fail, then open the Layers panel (a list).
+    // Make rendering a list fail, then open the Row order panel (a list).
     await page.evaluate(() => {
       const create = Document.prototype.createElement;
       window.restoreCreate = () => { Document.prototype.createElement = create; };
@@ -85,7 +85,7 @@ describe('data safety', () => {
         return create.call(this, tag, ...rest);
       };
     });
-    await page.getByRole('button', { name: 'Layers' }).click();
+    await page.getByRole('button', { name: 'Row order' }).click();
     assert.match(await page.locator('main.crash').innerText(), /Something went wrong[\s\S]*Your texts are safe/);
     await page.evaluate(() => window.restoreCreate());
     await page.getByRole('link', { name: 'Go to Texts' }).click();

@@ -4,13 +4,15 @@
   (:require [cljs.test :as t]
             [gloss.app-test]
             [gloss.formatting-test]
+            [gloss.guide-test]
             [gloss.infix-test]
             [gloss.layout-test]
+            [gloss.markdown-test]
             [gloss.morph-test]
             [gloss.notes-test]
             [gloss.parse-test]
             [gloss.reserved-test]
-            [gloss.rows-test]
+            [gloss.tiers-test]
             [gloss.vocab-test]))
 
 ;; A failing test makes the process exit with a failure status, so that CI

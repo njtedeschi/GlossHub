@@ -1,0 +1,5 @@
+{:main gloss.check-cli
+ :target :nodejs
+ :output-to "target/check/check.js"
+ :output-dir "target/check/out"
+ :optimizations :none}

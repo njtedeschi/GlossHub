@@ -1,0 +1,15 @@
+# Keeps the workflows' actions and the test tooling up to date: a pull
+# request a month for each, which CI tests like any other change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly

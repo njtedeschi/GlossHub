@@ -1,5 +1,5 @@
 (ns gloss.parse.text
-  "Reading the \\text row into words: each word as written, with its
+  "Reading the \\text tier into words: each word as written, with its
   punctuation, formatting, link and ruby readings, and the subline breaks
   (docs/format.md §5.1 and §6)."
   (:require [clojure.string :as str]
@@ -11,7 +11,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Tokens
 ;;
-;; The row is split at spaces. Punctuation, formatting delimiters and a
+;; The tier is split at spaces. Punctuation, formatting delimiters and a
 ;; link's brackets are taken off each end of a token; what is left is the
 ;; word.
 
@@ -130,9 +130,9 @@
                          "write \\" c " for a literal “" c "”."))})))
 
 ;; ---------------------------------------------------------------------------
-;; Reading the row
+;; Reading the tier
 ;;
-;; The row is read token by token, with a state: the words so far, the
+;; The tier is read token by token, with a state: the words so far, the
 ;; formatting styles open (:on), where an open link started (:link-from),
 ;; punctuation waiting for the next word (:pre), the subline breaks, and the
 ;; problems found (:diags).
@@ -246,8 +246,8 @@
         (attach-punctuation (assoc opened :on (:on st)) token lead trail)
         (read-word opened lead core trail)))))
 
-(defn parse-row
-  "Parses a \\text row into {:words :breaks :diagnostics}. A `+`
+(defn parse-tier
+  "Parses a \\text tier into {:words :breaks :diagnostics}. A `+`
   token starts a new subline.
   Formatting is kept on each word as runs (:fmt); a delimiter at the start
   or end of a word may span words, and closes within the line; one inside

@@ -1,7 +1,7 @@
 (ns gloss.formatting
   "Formatting: *italic* (or _italic_), **bold** (or __bold__), ~~struck~~,
   ==highlighted==, ++underlined++, and [links](address). Shared by \\text,
-  \\glword cells and prose (\\ft, notes, \\about); see docs/format.md §6.
+  \\glword entries and prose (\\ft, notes, \\about); see docs/format.md §6.
 
   Formatting is kept as runs over a text: [{:start :end :styles #{…}}],
   offsets into the plain text, only where some style applies."
@@ -80,10 +80,10 @@
             [(delims (styles-at runs (dec n)))]))))
 
 ;; ---------------------------------------------------------------------------
-;; Cells: a \glword item, where formatting must close within the item
+;; Entries: a \glword entry, where formatting must close within the entry
 
-(defn read-cell
-  "Reads formatting in one cell (escapes already hidden). Returns {:text
+(defn read-glword
+  "Reads formatting in one \\glword entry (escapes already hidden). Returns {:text
   :fmt :problems}; a delimiter left open is reported and closed at the end."
   [s]
   (let [n (count s)]
